@@ -92,6 +92,12 @@ export function buildStaticMeshes(world, tex) {
   const tileSize = (name) => tex.tiling(name).userData.size;
 
   // ---- parts ----
+  // Parts of one prop often share a face plane exactly (a cushion flush with its
+  // couch, a tub rim with its sides), and those faces z-fight. Each box grows by
+  // 0.4..3.2 mm, cycling part to part, so flush neighbours end up apart.
+  // Growing only ever pushes a face into the floor, a wall or the next part.
+  let partSeq = 0;
+  const grow = () => 0.0004 * (1 + (partSeq++ % 8));
   function addPart(floorId, pt) {
     if (pt.m === 'paper') {
       const m = partMatrix(pt);
@@ -103,7 +109,8 @@ export function buildStaticMeshes(world, tex) {
     const b = bucket(floorId, pt.m);
     if (pt.s === 'box') {
       const size = pt.m === 'fabric' || pt.m === 'fabricDS' ? 0.3 : pt.m === 'fur' ? 0.25 : 0.6;
-      pushBox(b, partMatrix(pt), [pt.d[0] / 2, pt.d[1] / 2, pt.d[2] / 2], pt.c, size);
+      const e = grow();
+      pushBox(b, partMatrix(pt), [pt.d[0] / 2 + e, pt.d[1] / 2 + e, pt.d[2] / 2 + e], pt.c, size);
     } else pushRound(b, pt);
   }
   for (const [floorId, parts] of Object.entries(geo.parts)) for (const pt of parts) addPart(floorId, pt);
@@ -389,10 +396,12 @@ export function buildStaticMeshes(world, tex) {
       const pitch = Math.atan2(b.y - a.y, h);
       const base = { p: [(a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2], ry: yaw, rz: pitch };
       const m = partMatrix(base);
-      pushBox(bucket(ch.floorId, 'plastic'), m, [len / 2, 0.025, 0.36], 0xf5c020);
+      // segments overlap at the joints; every other one is 1.5 mm fatter so the overlaps don't z-fight
+      const e = (i % 2) * 0.0015;
+      pushBox(bucket(ch.floorId, 'plastic'), m, [len / 2, 0.025 + e, 0.36 + e], 0xf5c020);
       for (const s of [-1, 1]) {
         const mm = m.clone().multiply(new THREE.Matrix4().makeTranslation(0, 0.14, s * 0.36));
-        pushBox(bucket(ch.floorId, 'plastic'), mm, [len / 2, 0.16, 0.025], 0xf08a24);
+        pushBox(bucket(ch.floorId, 'plastic'), mm, [len / 2, 0.16 + e, 0.025 + e], 0xf08a24);
       }
     }
     // two rods holding it up from the ceiling
@@ -412,8 +421,11 @@ export function buildStaticMeshes(world, tex) {
       const h = Math.hypot(dx, dz);
       const len = Math.hypot(h, b.y - a.y) + 0.12;
       const m = partMatrix({ p: [(a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2], ry: Math.atan2(-dz, dx), rz: Math.atan2(b.y - a.y, h) });
-      m.multiply(new THREE.Matrix4().makeTranslation(0, t.h / 2, 0));
-      pushBox(bucket(t.floorId, 'tunnel'), m, [len / 2, t.h / 2, t.w / 2], 0x9a7a5a, 1);
+      // +4 mm: the lining's floor sat on the room's floor plane and z-fought it.
+      // Segments overlap at the joints; every other one is 1.5 mm bigger so those don't z-fight.
+      const e = (i % 2) * 0.0015;
+      m.multiply(new THREE.Matrix4().makeTranslation(0, t.h / 2 + 0.004, 0));
+      pushBox(bucket(t.floorId, 'tunnel'), m, [len / 2, t.h / 2 + e, t.w / 2 + e], 0x9a7a5a, 1);
     }
   }
 

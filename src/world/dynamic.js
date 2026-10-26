@@ -96,13 +96,15 @@ export function buildDynamic(world, material) {
       const g = leafGeometry(leaf.len - (spec.kind === 'double' ? 0.005 : 0.02), h, spec.style, color);
       geometries.push(g);
       const at = leaf.hinge === 'from' ? spec.from + 0.01 : spec.to - 0.01;
+      // the second leaf of a double door sits 1 mm off the first's plane so their overlap can't z-fight
+      const off = spec.kind === 'double' && leaf.hinge === 'to' ? 0.001 : 0;
       const pivot = new THREE.Group();
       let baseYaw;
       if (spec.axis === 'x') {
-        pivot.position.set(at, spec.y, spec.at);
+        pivot.position.set(at, spec.y, spec.at + off);
         baseYaw = leaf.hinge === 'from' ? 0 : Math.PI;
       } else {
-        pivot.position.set(spec.at, spec.y, at);
+        pivot.position.set(spec.at + off, spec.y, at);
         baseYaw = leaf.hinge === 'from' ? -Math.PI / 2 : Math.PI / 2;
       }
       // open toward the swing side: try +90°, flip if the free end goes the wrong way
