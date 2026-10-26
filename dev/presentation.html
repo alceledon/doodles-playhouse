@@ -1,0 +1,332 @@
+<!doctype html>
+<!--
+  PRESENTATION DEV PAGE (Presentation-owned). The stub world, stub player and
+  stub Doodle, with the real UI, audio and cutscenes on top.
+
+  Serve the repo root (node tools/serve.mjs 8084, or the presentation-dev
+  launch config) and open /dev/presentation.html. Click anywhere once to
+  unlock audio. Click the 3D view to look around (WASD, Esc to release).
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Presentation dev page</title>
+  <link rel="stylesheet" href="../style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "../vendor/three/three.module.js",
+        "three/addons/": "../vendor/three/addons/"
+      }
+    }
+  </script>
+  <style>
+    #panel {
+      position: fixed; top: 0; right: 0; bottom: 0; width: 330px; z-index: 50;
+      overflow-y: auto; padding: 10px 12px 40px; background: rgba(12, 9, 20, 0.92);
+      border-left: 1px solid #3b2c55; font: 12px system-ui, sans-serif; color: #e8ddf6;
+    }
+    #panel.hidden { transform: translateX(100%); }
+    #toggle { position: fixed; top: 8px; right: 342px; z-index: 51; font: 12px system-ui; }
+    #panel.hidden + #toggle { right: 8px; }
+    #panel h3 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: #ffb84d; }
+    #panel h4 { margin: 8px 0 4px; font-size: 11px; color: #b9a9cf; }
+    #panel button { margin: 2px; padding: 3px 7px; font: 12px system-ui; color: #f3e9ff; background: #2a1f3d; border: 1px solid #5a4780; border-radius: 4px; cursor: pointer; }
+    #panel button:hover { border-color: #ffe45c; }
+    #panel label { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+    #panel input[type=range] { flex: 1; }
+    #panel select, #panel input[type=text], #panel input[type=number] { font: 12px system-ui; background: #1b1328; color: #f3e9ff; border: 1px solid #5a4780; border-radius: 4px; padding: 2px 4px; }
+    #panel table { width: 100%; border-collapse: collapse; font: 11px monospace; }
+    #panel td { padding: 1px 3px; border-bottom: 1px solid #2a1f3d; }
+    #panel .bad { color: #ff5d73; }
+    #log { white-space: pre-wrap; font: 11px monospace; color: #9f9; max-height: 140px; overflow-y: auto; }
+    #info { position: fixed; left: 8px; top: 8px; margin: 0; color: #9f9; font: 12px monospace; background: rgba(0,0,0,.6); padding: 6px; z-index: 40; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+  <div id="ui"></div>
+  <pre id="info"></pre>
+  <div id="panel"></div>
+  <button id="toggle">panel</button>
+  <script type="module">
+    import * as THREE from 'three';
+    import { createBus, EVENTS } from '../src/core/events.js';
+    import { createRng } from '../src/core/rng.js';
+    import { DOODLE_STATES, ITEM_IDS, LOCK_IDS, MAX_DAYS } from '../src/core/contracts.js';
+    import { createWorld } from '../src/core/stubs/world.js';
+    import { createGameplay } from '../src/core/stubs/gameplay.js';
+    import { createDoodle } from '../src/core/stubs/doodle.js';
+    import { createUI, createCutscenes } from '../src/ui/index.js';
+    import { createAudio } from '../src/audio/index.js';
+    import { VOICE_GROUPS } from '../src/audio/synth.js';
+    import { NOISE_KINDS, EVENT_SOUNDS } from '../src/audio/soundmap.js';
+
+    const bus = createBus();
+    const rng = createRng(1);
+    const renderer = new THREE.WebGLRenderer();
+    renderer.setPixelRatio(0.75);
+    renderer.setSize(innerWidth, innerHeight);
+    document.getElementById('game').append(renderer.domElement);
+    const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 80);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x07060c);
+    scene.add(camera);
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    const world = createWorld({ scene, bus, rng: rng.fork('world'), difficulty: 'normal' });
+    const ui = createUI({ root: document.getElementById('ui'), bus });
+    const gameplay = createGameplay({ scene, camera, canvas: renderer.domElement, world, bus, rng: rng.fork('gameplay'), difficulty: 'normal', settings: ui.settings });
+    const doodle = createDoodle({ scene, world, bus, rng: rng.fork('doodle'), difficulty: 'normal' });
+    const audio = createAudio({ bus, camera });
+    const cutscenes = createCutscenes({ camera, getScene: () => scene, ui, bus });
+    audio.setVolume(ui.settings.volume);
+    bus.on(EVENTS.SETTINGS_CHANGED, ({ settings }) => audio.setVolume(settings.volume));
+    bus.on(EVENTS.PAUSE_REQUEST, () => {}); // Esc just releases the mouse here
+
+    gameplay.startDay(1);
+    doodle.reset(world.anchors.kennel, { wakeDelay: 8 });
+    gameplay.setControlsEnabled(true);
+    ui.setHudVisible(true);
+
+    // ---- panel helpers ----------------------------------------------------------
+    const panel = document.getElementById('panel');
+    document.getElementById('toggle').onclick = () => panel.classList.toggle('hidden');
+    const logBox = document.createElement('div');
+    logBox.id = 'log';
+    const log = (...a) => {
+      logBox.textContent = `${a.join(' ')}\n${logBox.textContent}`.slice(0, 3000);
+      console.log('[dev]', ...a);
+    };
+    const h = (tag, text) => Object.assign(document.createElement(tag), { textContent: text });
+    const section = (title) => panel.appendChild(h('h3', title));
+    const btn = (label, fn, parent = panel) => {
+      const b = h('button', label);
+      b.onclick = fn;
+      parent.append(b);
+      return b;
+    };
+    const row = (labelText, input) => {
+      const l = h('label', labelText);
+      l.append(input);
+      panel.append(l);
+      return input;
+    };
+    const range = (min, max, step, value) => Object.assign(document.createElement('input'), { type: 'range', min, max, step, value });
+    const select = (options, value) => {
+      const s = document.createElement('select');
+      for (const o of options) s.append(Object.assign(document.createElement('option'), { value: o, textContent: o, selected: o === value }));
+      return s;
+    };
+    const check = (checked = false) => Object.assign(document.createElement('input'), { type: 'checkbox', checked });
+
+    // Freeze the stub player around menus and cutscenes, like main.js does.
+    async function frozen(fn) {
+      gameplay.setControlsEnabled(false);
+      gameplay.exitPointerLock();
+      doodle.setActive(false);
+      ui.setHudVisible(false);
+      try {
+        return await fn();
+      } finally {
+        ui.setHudVisible(true);
+        gameplay.setControlsEnabled(true);
+        doodle.setActive(aiOn.checked);
+      }
+    }
+
+    // ---- sound board ------------------------------------------------------------
+    section('Sound board');
+    btn('Unlock audio', () => audio.unlock());
+    const where = row('Play at', select(['in head', '3 m left', '3 m behind', 'at Doodle', '8 m away', 'floor above'], 'in head'));
+    const placeFor = () => {
+      const p = gameplay.player;
+      const e = p.eyePos();
+      const fwd = { x: -Math.sin(p.yaw), z: -Math.cos(p.yaw) };
+      const left = { x: -Math.cos(p.yaw), z: Math.sin(p.yaw) };
+      switch (where.value) {
+        case '3 m left': return { pos: { x: e.x + left.x * 3, y: e.y, z: e.z + left.z * 3 }, floorId: p.floorId, range: 20 };
+        case '3 m behind': return { pos: { x: e.x - fwd.x * 3, y: e.y, z: e.z - fwd.z * 3 }, floorId: p.floorId, range: 20 };
+        case '8 m away': return { pos: { x: e.x + fwd.x * 8, y: e.y, z: e.z + fwd.z * 8 }, floorId: p.floorId, range: 20 };
+        case 'floor above': return { pos: { x: e.x, y: e.y + 3, z: e.z }, floorId: p.floorId === 'ground' ? 'upstairs' : 'attic', range: 20 };
+        case 'at Doodle': { const d = activeDoodle(); return d ? { pos: { x: d.pos.x, y: d.pos.y + 0.9, z: d.pos.z }, floorId: d.floorId, range: 30 } : {}; }
+        default: return {};
+      }
+    };
+    for (const [group, ids] of Object.entries(VOICE_GROUPS)) {
+      panel.append(h('h4', group));
+      for (const id of ids) btn(id, () => log(`play ${id}`, audio.play(id, placeFor()) ? '' : '(not played: unlock audio first?)'));
+    }
+    panel.append(h('h4', 'emit NOISE (3 m ahead) — tests the kind → sound mapping'));
+    for (const kind of NOISE_KINDS) btn(kind, () => {
+      const p = gameplay.player;
+      const pos = { x: p.pos.x - Math.sin(p.yaw) * 3, y: p.pos.y + 0.5, z: p.pos.z - Math.cos(p.yaw) * 3 };
+      bus.emit(EVENTS.NOISE, { pos, floorId: p.floorId, loudness: 8, kind });
+    });
+    panel.append(h('h4', 'emit events — tests EVENT_SOUNDS'));
+    const payloads = {
+      [EVENTS.DOODLE_STATE]: { state: 'patrol', prev: 'sleep' },
+      [EVENTS.LINK_ENTER]: { linkId: 'slide', kind: 'slide' },
+      [EVENTS.DOOR_CLOSED]: { doorId: 'hallKitchen', by: 'player' },
+      [EVENTS.LOCK_OPENED]: { lockId: 'padlock' },
+      [EVENTS.EXIT_UNLOCKED]: { route: 'frontDoor' },
+      [EVENTS.TREAT_DROPPED]: { treatId: 't1', pos: { x: 4, y: 0, z: 3 }, floorId: 'ground' },
+    };
+    for (const type of Object.keys(EVENT_SOUNDS)) btn(type, () => bus.emit(type, payloads[type] ?? {}));
+    for (const type of [EVENTS.PAUSED, EVENTS.RESUMED]) btn(type, () => bus.emit(type, {}));
+    btn('measure all voices', async () => {
+      const table = document.createElement('table');
+      measureBox.replaceChildren(table);
+      for (const id of Object.values(VOICE_GROUPS).flat()) {
+        const m = await audio.measure(id);
+        const tr = table.insertRow();
+        const bad = !m || m.nonFinite || m.peakDb > 0 || m.loudDb < -36;
+        tr.className = bad ? 'bad' : '';
+        tr.innerHTML = `<td>${id}</td><td>loud ${m?.loudDb.toFixed(1)}</td><td>peak ${m?.peakDb.toFixed(1)}</td>`;
+      }
+      window.__measured = [...table.rows].map((r) => r.textContent);
+    });
+    const measureBox = panel.appendChild(document.createElement('div'));
+
+    // ---- Doodle sim ---------------------------------------------------------------
+    section('Doodle (drives jingle, panting, heartbeat, music, vignette)');
+    const aiOn = row('stub Doodle AI active', check(false));
+    aiOn.onchange = () => doodle.setActive(aiOn.checked);
+    const fakeOn = row('fake orbiting Doodle instead', check(false));
+    const fakeDist = row('distance', range(0.5, 30, 0.5, 8));
+    const fakeSpeed = row('speed', range(0, 5, 0.1, 2.5));
+    const fakeState = row('state', select(Object.values(DOODLE_STATES), 'patrol'));
+    const fakeFloor = row('other floor', check(false));
+    let orbit = 0;
+    const fake = { pos: { x: 0, y: 0, z: 0 }, floorId: 'ground', yaw: 0, state: 'patrol', speed: 0, model: doodle.model, bounds: () => ({ center: { ...fake.pos, y: fake.pos.y + 0.8 }, radius: 0.8 }) };
+    function activeDoodle() {
+      if (!fakeOn.checked) return doodle;
+      const p = gameplay.player;
+      const r = Number(fakeDist.value);
+      fake.speed = Number(fakeSpeed.value);
+      orbit += (fake.speed / Math.max(1, r)) * 0.016;
+      fake.pos = { x: p.pos.x + Math.cos(orbit) * r, y: p.pos.y + (fakeFloor.checked ? 3 : 0), z: p.pos.z + Math.sin(orbit) * r };
+      fake.floorId = fakeFloor.checked ? (p.floorId === 'ground' ? 'upstairs' : 'ground') : p.floorId;
+      fake.state = fakeState.value;
+      return fake;
+    }
+
+    // ---- HUD sim ----------------------------------------------------------------
+    section('HUD');
+    const promptText = row('prompt', Object.assign(document.createElement('input'), { type: 'text', value: 'Click: pick up Padlock Key' }));
+    btn('PROMPT', () => bus.emit(EVENTS.PROMPT, { text: promptText.value }));
+    btn('PROMPT null', () => bus.emit(EVENTS.PROMPT, { text: null }));
+    const heldItem = row('held', select(['(none)', ...ITEM_IDS], 'padlockKey'));
+    const heldUses = row('uses', Object.assign(document.createElement('input'), { type: 'number', value: '', placeholder: 'null' }));
+    btn('HELD', () => bus.emit(EVENTS.HELD, { itemId: heldItem.value === '(none)' ? null : heldItem.value, uses: heldUses.value === '' ? null : Number(heldUses.value) }));
+    btn('cycle all items', async () => {
+      for (const id of ITEM_IDS) {
+        bus.emit(EVENTS.HELD, { itemId: id, uses: id === 'treats' ? 3 : id === 'launcher' ? 2 : null });
+        await new Promise((r) => setTimeout(r, 700));
+      }
+    });
+    const stamOverride = row('override stamina', check(false));
+    const stam = row('stamina', range(0, 1, 0.01, 0.6));
+    panel.append(h('h4', 'toasts'));
+    for (const id of LOCK_IDS) btn(id, () => bus.emit(EVENTS.LOCK_OPENED, { lockId: id }));
+    for (const r of ['frontDoor', 'garage']) btn(`exit ${r}`, () => bus.emit(EVENTS.EXIT_UNLOCKED, { route: r }));
+
+    // ---- menus --------------------------------------------------------------------
+    section('Menus');
+    btn('Title', () => frozen(() => ui.showTitle()).then((r) => log('title →', JSON.stringify(r))));
+    for (let d = 1; d <= MAX_DAYS; d++) btn(`Day ${d}`, () => frozen(() => ui.showDayCard(d)).then(() => log(`day card ${d} done`)));
+    btn('Pause', () => frozen(() => ui.showPause()).then((r) => log('pause →', r)));
+    btn('Win', () => frozen(async () => {
+      const best = ui.recordTime('normal', 200 + Math.random() * 400);
+      await ui.showWin({ route: 'frontDoor', days: 3, seconds: 431.7, difficulty: 'normal', best });
+    }).then(() => log('win done')));
+    btn('Game over', () => frozen(() => ui.showGameOver({ difficulty: 'hard', seconds: 1250 })).then(() => log('game over done')));
+    btn('Settings', () => frozen(() => ui.openSettings()));
+    btn('How to Play', () => frozen(() => ui.openHowTo()));
+
+    // ---- cutscenes ------------------------------------------------------------------
+    section('Cutscenes');
+    const near = () => {
+      // Put the stub Doodle right next to the player, as at a real catch.
+      const p = gameplay.player;
+      doodle.pos = { x: p.pos.x - Math.sin(p.yaw) * 0.8, y: p.pos.y, z: p.pos.z - Math.cos(p.yaw) * 0.8 };
+      doodle.floorId = p.floorId;
+      doodle.model.object3d.position.set(doodle.pos.x, doodle.pos.y, doodle.pos.z);
+    };
+    const ctx = () => ({ player: gameplay.player, doodle, world });
+    btn('Catch', () => frozen(async () => {
+      near();
+      bus.emit(EVENTS.CAUGHT, { how: 'tackle' });
+      await cutscenes.playCatch(ctx());
+      gameplay.startDay(2);
+      doodle.reset(world.anchors.kennel, { wakeDelay: 8 });
+      await ui.showDayCard(2);
+      await cutscenes.playWake({ day: 2 });
+    }).then(() => log('catch → day 2 done')));
+    btn('Game over', () => frozen(async () => {
+      near();
+      bus.emit(EVENTS.CAUGHT, { how: 'tackle' });
+      await cutscenes.playGameOver(ctx());
+      bus.emit(EVENTS.GAME_OVER, { difficulty: 'normal', seconds: 900 });
+      await ui.showGameOver({ difficulty: 'normal', seconds: 900 });
+      gameplay.startDay(1);
+      doodle.reset(world.anchors.kennel, { wakeDelay: 8 });
+    }).then(() => log('game over done')));
+    for (const route of ['frontDoor', 'garage']) btn(`Escape (${route})`, () => frozen(async () => {
+      const spec = world.anchors[route];
+      const door = world.doors.find((d) => d.id === spec.doorId);
+      door.setLocked(false);
+      door.setOpen(true, 'player');
+      // stand just inside the door, facing out
+      const e = spec.exit.pos;
+      const dir = { x: e.x - door.pos.x, z: e.z - door.pos.z };
+      const len = Math.hypot(dir.x, dir.z);
+      gameplay.debug.teleport({ x: door.pos.x - (dir.x / len) * 1.2, y: 0, z: door.pos.z - (dir.z / len) * 1.2 }, 'ground');
+      gameplay.player.yaw = Math.atan2(-dir.x, -dir.z);
+      gameplay.setControlsEnabled(true);
+      gameplay.update(0);
+      gameplay.setControlsEnabled(false);
+      await cutscenes.playEscape({ route, player: gameplay.player, world });
+      bus.emit(EVENTS.WON, { route, days: 2, seconds: 300, difficulty: 'normal' });
+      await ui.showWin({ route, days: 2, seconds: 300, difficulty: 'normal', best: false });
+      door.setOpen(false, 'player');
+      gameplay.startDay(1);
+    }).then(() => log(`escape ${route} done`)));
+    btn('Wake (day 1)', () => frozen(() => cutscenes.playWake({ day: 1 })).then(() => log('wake done')));
+    btn('Wake (day 3)', () => frozen(() => cutscenes.playWake({ day: 3 })).then(() => log('wake done')));
+    btn('Day card → wake', () => frozen(async () => {
+      gameplay.startDay(4);
+      await ui.showDayCard(4);
+      await cutscenes.playWake({ day: 4 });
+    }));
+
+    section('Log');
+    panel.append(logBox);
+
+    // ---- loop ---------------------------------------------------------------------
+    const info = document.getElementById('info');
+    let last = performance.now();
+    renderer.setAnimationLoop((now) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      gameplay.update(dt);
+      if (stamOverride.checked) gameplay.player.stamina = Number(stam.value);
+      doodle.update(dt, gameplay.player);
+      world.update(dt, gameplay.player.pos);
+      const d = activeDoodle();
+      audio.update(dt, { camera, player: gameplay.player, doodle: d, world });
+      ui.update(dt, { player: gameplay.player, doodle: d });
+      renderer.render(scene, camera);
+      const s = audio.state;
+      const p = gameplay.player;
+      info.textContent = `${p.floorId} (${p.pos.x.toFixed(1)}, ${p.pos.y.toFixed(1)}, ${p.pos.z.toFixed(1)})  audio ${s.context}  tension ${s.tension.toFixed(2)}  heart ${s.heart.toFixed(2)}  doodle ${d?.state} ${s.doodle ? `${s.doodle.dist.toFixed(1)} m, ${s.doodle.floors} floors` : ''}`;
+    });
+    window.__dev = { THREE, bus, world, gameplay, doodle, ui, audio, cutscenes, scene, camera, fake };
+  </script>
+</body>
+</html>
