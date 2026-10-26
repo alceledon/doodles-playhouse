@@ -1,14 +1,16 @@
-// The fixture must satisfy the same contract and reachability rules as the
-// real World. At integration, the coordinator adds the real World to WORLDS.
+// The fixture and the real World must satisfy the same contract and
+// reachability rules.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { validateWorld, SPAWNED_ITEMS, FLOOR_IDS } from '../../src/core/contracts.js';
+import { validateWorld, SPAWNED_ITEMS, FLOOR_IDS, DIFFICULTIES } from '../../src/core/contracts.js';
 import { checkReachability, AGENTS, nearestPassable, reachableSet, refKey, NAV, flagsAt, parseKey } from '../../src/core/navgrid.js';
 import { createMiniHouse } from '../../src/core/fixtures/mini-house.js';
+import { buildWorldData } from '../../src/world/build.js';
 import { createBus, EVENTS } from '../../src/core/events.js';
 
 const WORLDS = {
   'mini-house fixture': () => createMiniHouse(),
+  ...Object.fromEntries(DIFFICULTIES.map((d) => [`real world (${d})`, () => buildWorldData({ difficulty: d })])),
 };
 
 for (const [name, make] of Object.entries(WORLDS)) {

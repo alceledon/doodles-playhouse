@@ -10,6 +10,8 @@
 //   ?seed=123            fixed run seed
 //   ?real=world,doodle   load these areas for real even if areas.js says stub
 //   ?stub=world,doodle   force stubs for these areas (world, gameplay, doodle, ui, audio)
+//   ?tick=timer          drive requestAnimationFrame from setTimeout (automated tests in a
+//                        browser pane that isn't painting, where rAF never fires)
 
 import * as THREE from 'three';
 import { createBus, EVENTS } from './core/events.js';
@@ -23,6 +25,24 @@ const DEBUG = params.has('debug');
 const listParam = (name) => new Set((params.get(name) ?? '').split(',').filter(Boolean));
 const forcedReal = listParam('real');
 const forcedStubs = listParam('stub');
+
+if (params.get('tick') === 'timer') {
+  // Patched before boot, so every rAF user (this loop, cutscenes, UI) gets it.
+  const timers = new Map();
+  let next = 0;
+  window.requestAnimationFrame = (cb) => {
+    const handle = ++next;
+    timers.set(handle, setTimeout(() => {
+      timers.delete(handle);
+      cb(performance.now());
+    }, 16));
+    return handle;
+  };
+  window.cancelAnimationFrame = (handle) => {
+    clearTimeout(timers.get(handle));
+    timers.delete(handle);
+  };
+}
 
 const AREAS = {
   world: { real: './world/index.js', stub: './core/stubs/world.js' },

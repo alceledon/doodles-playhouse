@@ -92,7 +92,8 @@ export function buildDynamic(world, material) {
       ? [{ hinge: 'from', len: len / 2 }, { hinge: 'to', len: len / 2 }]
       : [{ hinge: spec.hinge, len }];
     for (const leaf of leaves) {
-      const g = leafGeometry(leaf.len - 0.02, h, spec.style, color);
+      // Double leaves overlap 1 cm at the center so a look-ray down the middle can't slip between them.
+      const g = leafGeometry(leaf.len - (spec.kind === 'double' ? 0.005 : 0.02), h, spec.style, color);
       geometries.push(g);
       const at = leaf.hinge === 'from' ? spec.from + 0.01 : spec.to - 0.01;
       const pivot = new THREE.Group();
