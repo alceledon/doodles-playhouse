@@ -1,0 +1,200 @@
+<!doctype html>
+<!--
+  GAMEPLAY DEV PAGE. The stub world (mini-house fixture) with the real
+  Gameplay: player controller, items, locks, both escapes, hiding, slides,
+  traps and defenses. Optional stub Doodle (button, or ?doodle=1).
+
+  Serve the repo root (node tools/serve.mjs 8083) and open /dev/gameplay.html.
+  Add ?seed=N for a fixed layout, ?difficulty=hard for more traps.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gameplay dev page</title>
+  <link rel="stylesheet" href="../style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "../vendor/three/three.module.js",
+        "three/addons/": "../vendor/three/addons/"
+      }
+    }
+  </script>
+  <style>
+    #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; font: 15px system-ui, sans-serif; text-shadow: 0 1px 3px #000; }
+    #dot { position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px; border-radius: 50%; background: #fff; opacity: .8; }
+    #dot.hand { width: 12px; height: 12px; margin: -6px; background: none; border: 2px solid #ffd76a; }
+    #prompt { position: absolute; left: 0; right: 0; top: 56%; text-align: center; }
+    #held { position: absolute; right: 20px; bottom: 20px; }
+    #stamina { position: absolute; left: 20px; bottom: 20px; height: 6px; width: 160px; background: #7fd; border-radius: 3px; }
+    #banner { position: absolute; left: 0; right: 0; top: 30%; text-align: center; font-size: 42px; font-weight: 700; display: none; }
+    #panel { position: fixed; right: 8px; top: 8px; display: flex; flex-direction: column; gap: 4px; font: 12px monospace; z-index: 5; }
+    #panel button, #panel select { font: inherit; padding: 3px 6px; background: #2a1f3d; color: #f3e9ff; border: 1px solid #887; border-radius: 4px; cursor: pointer; }
+    #info { position: fixed; left: 8px; top: 8px; margin: 0; color: #9f9; font: 12px monospace; background: rgba(0,0,0,.6); padding: 6px; max-width: 46vw; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+  <div id="ui"></div>
+  <div id="hud">
+    <div id="dot"></div><div id="prompt"></div><div id="held"></div><div id="stamina"></div><div id="banner"></div>
+  </div>
+  <div id="panel">
+    <button id="bDoodle">Stub Doodle: off</button>
+    <button id="bLocks">Open all locks</button>
+    <select id="sGive"><option value="">Give item…</option></select>
+    <select id="sGo"><option value="">Teleport…</option></select>
+    <button id="bDay">Next day</button>
+    <button id="bNoclip">Noclip: off</button>
+    <button id="bRestart">Restart</button>
+  </div>
+  <pre id="info"></pre>
+  <script type="module">
+    import * as THREE from 'three';
+    import { createBus, EVENTS } from '../src/core/events.js';
+    import { createRng } from '../src/core/rng.js';
+    import { ITEM_IDS, DIFFICULTIES } from '../src/core/contracts.js';
+    import { createWorld } from '../src/core/stubs/world.js';
+    import { createDoodle } from '../src/core/stubs/doodle.js';
+    import { createGameplay } from '../src/gameplay/index.js';
+    import { itemName } from '../src/gameplay/items.js';
+
+    const params = new URLSearchParams(location.search);
+    const seed = params.has('seed') ? Number(params.get('seed')) : 1;
+    const difficulty = DIFFICULTIES.includes(params.get('difficulty')) ? params.get('difficulty') : 'normal';
+    const $ = (id) => document.getElementById(id);
+
+    const bus = createBus();
+    const rng = createRng(seed);
+    const renderer = new THREE.WebGLRenderer();
+    renderer.setPixelRatio(0.75);
+    renderer.setSize(innerWidth, innerHeight);
+    $('game').append(renderer.domElement);
+    const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 80);
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x07060c);
+    scene.add(camera);
+
+    const world = createWorld({ scene, bus, rng: rng.fork('world'), difficulty });
+    const gameplay = createGameplay({ scene, camera, canvas: renderer.domElement, world, bus, rng: rng.fork('gameplay'), difficulty });
+    let day = 1;
+    let doodle = null;
+    gameplay.startDay(day);
+    gameplay.setControlsEnabled(true); // click the canvas to lock the mouse
+
+    // ---- HUD ----
+    const log = [];
+    const quiet = new Set([EVENTS.FOOTSTEP, EVENTS.PROMPT, EVENTS.HELD, EVENTS.DOODLE_STATE]);
+    for (const type of Object.values(EVENTS))
+      bus.on(type, (p) => {
+        if (quiet.has(type)) return;
+        console.log(type, p);
+        log.push(`${type} ${JSON.stringify(p, (k, v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v))}`);
+        if (log.length > 8) log.shift();
+      });
+    bus.on(EVENTS.PROMPT, ({ text }) => {
+      $('prompt').textContent = text ?? '';
+      $('dot').className = text && text.startsWith('Click') ? 'hand' : '';
+    });
+    bus.on(EVENTS.HELD, ({ itemId, uses }) => ($('held').textContent = itemId ? `Holding: ${itemName(itemId)}${uses != null ? ` (${uses})` : ''}` : ''));
+    bus.on(EVENTS.PAUSE_REQUEST, () => {}); // Esc just unlocks the mouse here
+    bus.on(EVENTS.ESCAPED, ({ route }) => {
+      $('banner').textContent = `ESCAPED (${route})`;
+      $('banner').style.display = 'block';
+      gameplay.setControlsEnabled(false);
+      gameplay.exitPointerLock();
+      doodle?.setActive(false);
+    });
+    bus.on(EVENTS.CAUGHT, () => {
+      gameplay.setControlsEnabled(false);
+      gameplay.exitPointerLock();
+      doodle?.setActive(false);
+      gameplay.onCaught();
+      $('banner').textContent = 'CAUGHT';
+      $('banner').style.display = 'block';
+      setTimeout(nextDay, 1200);
+    });
+
+    function nextDay() {
+      day += 1;
+      $('banner').style.display = 'none';
+      gameplay.startDay(day);
+      doodle?.reset(world.anchors.kennel, { wakeDelay: 3 });
+      gameplay.setControlsEnabled(true);
+      doodle?.setActive(true);
+    }
+
+    // ---- panel ----
+    $('bDoodle').onclick = () => {
+      if (!doodle) {
+        doodle = createDoodle({ scene, world, bus, rng: rng.fork('doodle'), difficulty });
+        doodle.reset(world.anchors.kennel, { wakeDelay: 3 });
+        doodle.setActive(true);
+      } else doodle.setActive(!doodle.__active);
+      doodle.__active = !doodle.__active;
+      $('bDoodle').textContent = `Stub Doodle: ${doodle.__active ? 'on' : 'off'}`;
+    };
+    if (params.get('doodle') === '1') $('bDoodle').onclick();
+    $('bLocks').onclick = () => gameplay.debug.openAllLocks();
+    for (const id of ITEM_IDS) $('sGive').append(new Option(itemName(id), id));
+    $('sGive').onchange = (e) => {
+      if (e.target.value) gameplay.debug.giveItem(e.target.value);
+      e.target.value = '';
+    };
+    const a = world.anchors;
+    const spots = {
+      'Bedroom (start)': [a.startBed.pos, a.startBed.floorId],
+      'Front door': [{ x: 3, y: 0, z: 1.2 }, 'ground'],
+      'Fuse box': [{ x: 1, y: 0, z: 2 }, 'ground'],
+      'Garage / Jeep': [{ x: 11, y: 0, z: 4.5 }, 'ground'],
+      'Kitchen': [{ x: 8.5, y: 0, z: 5.5 }, 'ground'],
+      'Slide top': [{ x: 5.6, y: 3, z: 1.25 }, 'upstairs'],
+      'Tunnel (hall end)': [{ x: 4.8, y: 0, z: 1.25 }, 'ground'],
+      'Attic chest': [{ x: 3.5, y: 3, z: 1.6 }, 'upstairs'],
+    };
+    for (const name of Object.keys(spots)) $('sGo').append(new Option(name, name));
+    $('sGo').onchange = (e) => {
+      const s = spots[e.target.value];
+      if (s) gameplay.debug.teleport(s[0], s[1]);
+      e.target.value = '';
+    };
+    $('bDay').onclick = () => nextDay();
+    let noclip = false;
+    $('bNoclip').onclick = () => {
+      noclip = !noclip;
+      gameplay.debug.setNoclip(noclip);
+      $('bNoclip').textContent = `Noclip: ${noclip ? 'on' : 'off'}`;
+    };
+    $('bRestart').onclick = () => location.reload();
+
+    // ---- loop ----
+    let last = performance.now();
+    renderer.setAnimationLoop((now) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      gameplay.update(dt);
+      doodle?.update(dt, gameplay.player);
+      world.update(dt, gameplay.player.pos);
+      renderer.render(scene, camera);
+      const p = gameplay.player;
+      $('stamina').style.width = `${160 * p.stamina}px`;
+      $('info').textContent = [
+        `seed ${seed} ${difficulty} day ${day}  code ${gameplay.debug.keypadCode()}`,
+        `${p.floorId} (${p.pos.x.toFixed(2)}, ${p.pos.y.toFixed(2)}, ${p.pos.z.toFixed(2)}) yaw ${p.yaw.toFixed(2)} pitch ${p.pitch.toFixed(2)}`,
+        `held=${p.held} crouch=${p.crouched} sprint=${p.sprinting} hidden=${p.hidden} link=${p.onLink?.kind ?? '-'} vis=${p.visibility().toFixed(2)}`,
+        doodle ? `doodle ${doodle.state} (${doodle.pos.x.toFixed(1)}, ${doodle.pos.z.toFixed(1)})` : 'doodle off',
+        'click to look · WASD · Shift sprint · C crouch · E/click use · right click item · G drop · F light',
+        '',
+        ...log,
+      ].join('\n');
+    });
+    window.__dev = { THREE, bus, world, gameplay, scene, camera, renderer, get doodle() { return doodle; } };
+  </script>
+</body>
+</html>
