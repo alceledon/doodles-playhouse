@@ -121,7 +121,7 @@ export const UPSTAIRS = {
     { id: 'lampNursery', x: 7.85, y: 0.35, z: 2.5, color: 0xff9de2, intensity: 0.6, range: 4.5, flicker: true, fixture: 'night', rotY: W },
     { id: 'lampLanding', x: 12, y: 2.55, z: 4, color: 0xffe0a0, intensity: 0.8, range: 6.5, fixture: 'ceiling' },
     { id: 'lampCraft', x: 16.5, y: 1.51, z: 0.55, color: 0xfff0c0, intensity: 0.85, range: 6, fixture: 'none' },
-    { id: 'lampBedroom', x: 1.2, y: 1.45, z: 11.3, color: 0xffc890, intensity: 0.7, range: 5, fixture: 'clip' },
+    { id: 'lampBedroom', x: 1.2, y: 1.75, z: 11.6, color: 0xffc890, intensity: 0.65, range: 5, fixture: 'clip' },
     { id: 'nightBedroom', x: 3.5, y: 0.35, z: 17.85, color: 0x9ab0ff, intensity: 0.4, range: 3.5, flicker: true, fixture: 'night', rotY: N },
     { id: 'lampSlide', x: 12, y: 2.55, z: 13.5, color: 0xfff0a0, intensity: 0.8, range: 6.5, fixture: 'ceiling' },
     { id: 'lampBathroom', x: 20, y: 2.6, z: 10.5, color: 0xd0f0ff, intensity: 0.7, range: 5, fixture: 'ceiling' },

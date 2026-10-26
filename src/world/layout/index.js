@@ -48,7 +48,7 @@ export const LINKS = [
       [23.45, 0, 17.2], [22.9, 0, 17.1], [22.75, 0, 16.3], [22.75, 0, 15.75],
     ],
     // inside of the duct the camera crawls through: centreline, width, height
-    interior: { points: [[18.0, -3, 17.2], [19.5, -3, 17.2], [23.0, -0.5, 17.2], [23.55, 0.05, 17.2]], w: 1.3, h: 0.85 },
+    interior: { points: [[18.0, -3, 17.2], [19.5, -3, 17.2], [23.2, -0.9, 17.2]], w: 1.3, h: 0.85 },
     mouths: [
       { floorId: 'basement', box: { minX: 17.98, maxX: 18.08, minY: -3, maxY: -2.2, minZ: 16.5, maxZ: 17.9 } },
       { floorId: 'ground', box: { minX: 21.9, maxX: 23.9, minY: 0, maxY: 0.8, minZ: 16.42, maxZ: 16.55 } },

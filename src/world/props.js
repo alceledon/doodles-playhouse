@@ -4,10 +4,12 @@
 // world. meshes.js turns `parts` into merged geometry; build.js turns
 // `colliders` into the collision and nav data, so both always agree.
 //
-// Part: { s: 'box'|'cyl'|'sph'|'cone', p: [x,y,z] centre, d: size, m: material, c: 0xRRGGBB,
-//         ry?, rx?, rz?, seg? }
+// Part: { s: 'box'|'cyl'|'sph'|'cone'|'tube', p: [x,y,z] centre, d: size, m: material, c: 0xRRGGBB,
+//         ry?, rx?, rz?, seg?, tex? }
 //   box  d = [sx, sy, sz]      cyl/cone d = [radiusTop, height, radiusBottom]      sph d = [r]
-// Materials: plastic, wood, fabric, metal, glow (unlit), dark (unlit black), fur.
+//   tube d = [r, length], an open cylinder along local X
+// Materials: plastic, wood, fabric, fabricDS (double-sided), metal, fur, glow (unlit),
+//   dark (unlit), slats (see-through louvres), paper (a box whose front face shows atlas picture `tex`).
 //
 // Extras a builder may add (all local): points {name: [x,y,z]}, boxes {name: Box},
 // yaws {name: number}, moving [{ pivot: [x,y,z], parts, motion }].
@@ -471,7 +473,7 @@ export function bunkBed({ len = 2.1, w = 1.0, color = C.blue, sheet = C.yellow, 
   const out = { parts, colliders: [K(-len / 2, len / 2, 0, 1.7, -w / 2, w / 2)] };
   if (underbed) {
     out.boxes = { use: K(-len / 2, len / 2, 0, 0.45, -w / 2 - 0.02, w / 2) };
-    out.points = { use: [0, 0.3, -w / 2 - 0.03], eye: [0, 0.16, -w / 2 + 0.25], exit: [0, 0, -w / 2 - 0.65] };
+    out.points = { use: [0, 0.3, -w / 2 - 0.03], eye: [0, 0.17, -w / 2 + 0.45], exit: [0, 0, -w / 2 - 0.65] }; // deep enough that the frame edge shows
     out.yaws = { eye: 0 };
   }
   return out;
@@ -492,7 +494,7 @@ export function crib({ len = 1.4, w = 0.8, color = C.white, mobile = true } = {}
     parts,
     colliders: [K(-len / 2, len / 2, 0, 1.1, -w / 2, w / 2)],
     boxes: { use: K(-len / 2, len / 2, 0, 0.5, -w / 2 - 0.02, w / 2) },
-    points: { use: [0, 0.3, -w / 2 - 0.03], eye: [0, 0.16, -w / 2 + 0.2], exit: [0, 0, -w / 2 - 0.6], mobile: [0, 1.75, 0] },
+    points: { use: [0, 0.3, -w / 2 - 0.03], eye: [0, 0.17, -w / 2 + 0.38], exit: [0, 0, -w / 2 - 0.6], mobile: [0, 1.75, 0] },
     yaws: { eye: 0 },
     mobile,
   };
@@ -881,8 +883,8 @@ export function crawlDuct({ len = 5.9, d = 1.5, crawl = 1.5, color = 0x8a6a4a, t
   const zc = z0 + crawl;
   const side = d / 2 - 0.1; // inner face of the outer (+X) panel
   const parts = [
-    B(d / 2 - 0.05, 1.5, 0, 0.1, 3, len, 'wood', color), // outer side panel, floor to ceiling
-    B(-0.05, 1.9, z0 + 0.05, d - 0.1, 2.2, 0.1, 'wood', color), // face above the mouth
+    B(d / 2 - 0.05, 1.48, 0, 0.1, 2.96, len, 'wood', color), // outer side panel, stopping just under the ceiling
+    B(-0.05, 1.88, z0 + 0.05, d - 0.1, 2.16, 0.1, 'wood', color), // face above the mouth
     B(-0.05, 0.875, (z0 + zc) / 2 + 0.05, d - 0.1, 0.15, crawl - 0.1, 'wood', 0x5a4030), // crawl roof
     B(-0.05, 0.01, (z0 + zc) / 2, d - 0.1, 0.02, crawl, 'wood', 0x4a3424), // floorboards inside
     B(-0.05, 0.84, z0 - 0.01, d - 0.05, 0.08, 0.04, 'plastic', trim), // painted mouth frame
@@ -907,7 +909,7 @@ export function cubby({ w = 2.0, d = 1.4 } = {}) {
     B(0, 0.97, 0, w + 0.04, 0.04, d + 0.02, 'wood', C.mint),
     B(0, 0.75, -d / 2 + 0.01, w, 0.1, 0.02, 'wood', C.pink), // skirt over the opening
     B(-w / 2 + 0.35, 0.4, -d / 2 - 0.25, 0.5, 0.62, 0.025, 'wood', C.teal, { ry: -1.1 }), // its little door, hanging open
-    B(0.55, 0.004, 0.1, 0.7, 0.008, 0.8, 'dark', C.black), // the hatch down into the duct
+    B(0.65, -0.45, 0, 0.7, 0.02, 1.0, 'dark', C.black), // bottom of the hatch shaft, seen through the floor hole
     B(0.7, 0.4, d / 2 - 0.06, 0.7, 0.75, 0.04, 'wood', 0x6e4528, { rx: 0.12 }), // hatch lid leaning on the wall
     CY(-0.4, 1.05, 0.1, 0.12, 0.12, 'metal', C.steel, { seg: 10 }), CY(0.2, 1.03, -0.2, 0.1, 0.08, 'metal', C.red, { seg: 10 }),
   ];

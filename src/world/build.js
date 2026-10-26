@@ -160,12 +160,15 @@ export function buildWorldData({ difficulty = 'normal', bus = null, onDoorChange
     for (const seg of f.walls) {
       const t = seg.t ?? 0.2;
       const b = f.bounds;
-      // walls ending on the floor's outline grow by half a thickness so corners close
+      // outer walls grow by half a thickness at the corners so they close; inner
+      // walls stop at the outer wall's centreline, inside it, so no faces overlap
       const onEdge = (val, lo, hi) => Math.abs(val - lo) < EPS || Math.abs(val - hi) < EPS;
-      const lo = seg.axis === 'x' ? [b.minX, b.maxX] : [b.minZ, b.maxZ];
+      const [along, across] = seg.axis === 'x' ? [[b.minX, b.maxX], [b.minZ, b.maxZ]] : [[b.minZ, b.maxZ], [b.minX, b.maxX]];
       const ext = { ...seg };
-      if (onEdge(seg.from, ...lo)) ext.from = seg.from - t / 2;
-      if (onEdge(seg.to, ...lo)) ext.to = seg.to + t / 2;
+      if (onEdge(seg.at, ...across)) {
+        if (onEdge(seg.from, ...along)) ext.from = seg.from - t / 2;
+        if (onEdge(seg.to, ...along)) ext.to = seg.to + t / 2;
+      }
       for (const pc of cutWall(ext, openings, f.height)) {
         const bx = seg.axis === 'x'
           ? box(pc.from, pc.to, y + pc.y0, y + pc.y1, seg.at - t / 2, seg.at + t / 2)

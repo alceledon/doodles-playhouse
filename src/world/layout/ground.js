@@ -191,4 +191,6 @@ export const GROUND = {
   ],
   marks: [{ box: flat(22, 23.5, 16.5, 17.5), crawl: true }], // inside the kitchen cubby
   holes: [],
+  /** The hatch at the back of the cubby where the laundry duct comes up. */
+  slabHoles: [R(23.2, 23.9, 16.7, 17.7)],
 };

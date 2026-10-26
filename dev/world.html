@@ -1,0 +1,118 @@
+<!doctype html>
+<!--
+  WORLD DEV PAGE: a fly-through of the real playhouse (src/world/) driven by
+  the STUB player. Serve the repo root (node tools/serve.mjs 8081, or the
+  `world-dev` launch config) and open /dev/world.html.
+
+  Keys: click to look · WASD move · Shift sprint · C crouch · F flashlight · E use
+        V noclip (Space up, Q down while moving) · 1-4 jump to basement/ground/upstairs/attic
+        0 back to the start bed · O nav grid · M anchor markers · R render scale 0.75/1
+  URL:  ?difficulty=hard  ?seed=7
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>World dev page</title>
+  <link rel="stylesheet" href="../style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "../vendor/three/three.module.js",
+        "three/addons/": "../vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="game"></div>
+  <div id="ui"></div>
+  <pre id="info" style="position:fixed;left:8px;top:8px;margin:0;color:#9f9;font:12px monospace;background:rgba(0,0,0,.6);padding:6px;pointer-events:none"></pre>
+  <pre id="prompt" style="position:fixed;left:50%;bottom:18%;transform:translateX(-50%);margin:0;color:#fff;font:14px monospace;text-shadow:0 1px 2px #000;pointer-events:none"></pre>
+  <div style="position:fixed;left:50%;top:50%;width:4px;height:4px;margin:-2px;background:#fff;border-radius:2px;opacity:.7;pointer-events:none"></div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { createBus, EVENTS } from '../src/core/events.js';
+    import { createRng } from '../src/core/rng.js';
+    import { createWorld } from '../src/world/index.js';
+    import { createGameplay } from '../src/core/stubs/gameplay.js';
+
+    const params = new URLSearchParams(location.search);
+    const difficulty = params.get('difficulty') ?? 'normal';
+    const bus = createBus();
+    const rng = createRng(Number(params.get('seed') ?? 1));
+    const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+    let scale = 0.75;
+    renderer.setPixelRatio(scale);
+    renderer.setSize(innerWidth, innerHeight);
+    document.getElementById('game').append(renderer.domElement);
+    const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 80);
+    const scene = new THREE.Scene();
+    scene.add(camera);
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    const t0 = performance.now();
+    const world = createWorld({ scene, bus, rng: rng.fork('world'), difficulty });
+    const buildMs = performance.now() - t0;
+    const gameplay = createGameplay({ scene, camera, canvas: renderer.domElement, world, bus, rng: rng.fork('gameplay'), difficulty });
+    gameplay.startDay(1);
+    gameplay.setControlsEnabled(true); // click the canvas to lock the mouse
+
+    // Log every event except the chatty ones, so you can see doors and containers emit.
+    for (const type of Object.values(EVENTS)) if (type !== EVENTS.FOOTSTEP && type !== EVENTS.PROMPT) bus.on(type, (p) => console.log(type, p));
+    bus.on(EVENTS.PAUSE_REQUEST, () => {}); // Esc just unlocks the mouse here
+    let promptText = '';
+    bus.on(EVENTS.PROMPT, ({ text }) => (promptText = text ?? ''));
+
+    const jumps = {
+      Digit1: [{ x: 12, y: -3, z: 6.5 }, 'basement'],
+      Digit2: [{ x: 12, y: 0, z: 3.0 }, 'ground'],
+      Digit3: [{ x: 12, y: 3, z: 6.5 }, 'upstairs'],
+      Digit4: [{ x: 12, y: 6, z: 7.0 }, 'attic'],
+    };
+    let noclip = false;
+    let nav = false;
+    let anchors = false;
+    addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      if (jumps[e.code]) gameplay.debug.teleport(...jumps[e.code]);
+      if (e.code === 'Digit0') gameplay.startDay(1);
+      if (e.code === 'KeyV') gameplay.debug.setNoclip((noclip = !noclip));
+      if (e.code === 'KeyO') world.debug.showNav((nav = !nav));
+      if (e.code === 'KeyM') world.debug.showAnchors((anchors = !anchors));
+      if (e.code === 'KeyR') {
+        scale = scale === 0.75 ? 1 : 0.75;
+        renderer.setPixelRatio(scale);
+        renderer.setSize(innerWidth, innerHeight);
+      }
+    });
+
+    let last = performance.now();
+    let fps = 60;
+    renderer.setAnimationLoop((now) => {
+      const raw = (now - last) / 1000;
+      const dt = Math.min(0.05, raw);
+      last = now;
+      fps += (1 / Math.max(raw, 1e-3) - fps) * 0.05;
+      gameplay.update(dt);
+      world.update(dt, gameplay.player.pos);
+      renderer.render(scene, camera);
+      const p = gameplay.player;
+      const room = world.roomAt(p.pos, p.floorId);
+      const info = renderer.info.render;
+      document.getElementById('info').textContent = [
+        `fps ${fps.toFixed(0)}  draw calls ${info.calls}  tris ${(info.triangles / 1000).toFixed(1)}k  scale ${scale}  built in ${buildMs.toFixed(0)} ms  ${difficulty}`,
+        `${p.floorId} (${p.pos.x.toFixed(2)}, ${p.pos.y.toFixed(2)}, ${p.pos.z.toFixed(2)})  ${room?.name ?? 'outside'}  light ${world.lightLevelAt(p.eyePos(), p.floorId).toFixed(2)}${noclip ? '  NOCLIP' : ''}${p.hidden ? '  HIDDEN' : ''}`,
+        `lamp pool: ${world.debug.lights().join(' | ')}`,
+        'click: look  WASD  Shift  C crouch  F light  E use  V noclip (Space/Q)  1-4 floors  0 bed  O nav  M anchors  R scale',
+      ].join('\n');
+      document.getElementById('prompt').textContent = promptText;
+    });
+    window.__dev = { THREE, bus, world, gameplay, scene, camera, renderer };
+  </script>
+</body>
+</html>
