@@ -25,7 +25,7 @@ const BASE = {
   },
   reach: 2.2, // interaction raycast length (m)
   steps: { walk: 0.5, sprint: 0.32, crouch: 0.72 }, // seconds between footsteps
-  bob: { walk: 0.028, sprint: 0.05, crouch: 0.014, freq: 2.1 }, // head bob amplitude (m), cycles per meter
+  bob: { walk: 0.028, sprint: 0.05, crouch: 0.014, freq: 0.7 }, // head bob amplitude (m); freq = bobs per meter walked
   noise: {
     // NOISE loudness = Doodle's hearing radius in meters
     sprintStep: 7,
@@ -69,7 +69,7 @@ const BASE = {
     slideEye: 0.62, // eye height while sitting on the slide
     crawlEye: 0.45,
   },
-  flashlight: { visibility: 0.6, intensity: 10, distance: 15, angle: 0.42, penumbra: 0.55, decay: 1.4 },
+  flashlight: { visibility: 0.6, intensity: 5, distance: 15, angle: 0.45, penumbra: 0.6, decay: 1.2 },
   crouchVisibility: 0.6,
   messageSeconds: 1.8, // how long a one-off prompt ("Locked: needs ...") stays up
 };
