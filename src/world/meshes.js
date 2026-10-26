@@ -10,6 +10,8 @@ import { Bucket, pushBox, pushRound, partMatrix, windToward, ONE } from './geom.
 
 const _c = new THREE.Color();
 const EPS = 1e-4;
+/** How far ceilings hang below the slab, so nothing on the slab plane can z-fight them. */
+const CEILING_DROP = 0.004;
 
 // ---- the builder -------------------------------------------------------------------
 
@@ -155,7 +157,12 @@ export function buildStaticMeshes(world, tex) {
       const capFixed = longAxis === 'x' ? (side > 0 ? b.maxX : b.minX) : side > 0 ? b.maxZ : b.minZ;
       const capTop = wb.gable ? roof.y + roof.kneeY : b.maxY;
       const capSample = longAxis === 'x' ? new THREE.Vector3(capFixed + side * 0.06, (b.minY + capTop) / 2, (b.minZ + b.maxZ) / 2) : new THREE.Vector3((b.minX + b.maxX) / 2, (b.minY + capTop) / 2, capFixed + side * 0.06);
-      if (!insideOtherWall(wb.floorId, capSample, b) && !(wb.floorId === 'basement' && !roomAt(wb.floorId, capSample.x, capSample.z))) {
+      // A cap lying in another wall's face plane (outer corners) would z-fight that face:
+      // skip it when the point just behind the cap is inside another wall too.
+      const behindCap = capSample.clone();
+      if (longAxis === 'x') behindCap.x = capFixed - side * 0.01;
+      else behindCap.z = capFixed - side * 0.01;
+      if (!insideOtherWall(wb.floorId, capSample, b) && !insideOtherWall(wb.floorId, behindCap, b) && !(wb.floorId === 'basement' && !roomAt(wb.floorId, capSample.x, capSample.z))) {
         const half = [(b.maxX - b.minX) / 2, (capTop - b.minY) / 2, (b.maxZ - b.minZ) / 2];
         const m = new THREE.Matrix4().makeTranslation((b.minX + b.maxX) / 2, (b.minY + capTop) / 2, (b.minZ + b.maxZ) / 2);
         const fi = longAxis === 'x' ? (side > 0 ? 0 : 1) : side > 0 ? 2 : 3;
@@ -186,7 +193,9 @@ export function buildStaticMeshes(world, tex) {
       const cname = r.ceiling ?? 'plain';
       const cs = tileSize(cname);
       for (const rect of subtract(r.bounds, holesAbove(f))) {
-        const y = f.y + f.height;
+        // A few mm below the slab: furniture on the floor above has its bottom
+        // faces on the slab plane, also facing down, and z-fought through here.
+        const y = f.y + f.height - CEILING_DROP;
         bucket(f.id, `tile:${cname}`).quad(
           new THREE.Vector3(rect.minX, y, rect.minZ), new THREE.Vector3(rect.maxX, y, rect.minZ),
           new THREE.Vector3(rect.maxX, y, rect.maxZ), new THREE.Vector3(rect.minX, y, rect.maxZ),
@@ -347,7 +356,7 @@ export function buildStaticMeshes(world, tex) {
       const x = starRng.range(r.bounds.minX + 0.4, r.bounds.maxX - 0.4);
       const z = starRng.range(r.bounds.minZ + 0.4, r.bounds.maxZ - 0.4);
       const s = starRng.range(0.07, 0.14);
-      const m = partMatrix({ p: [x, f.y + f.height - 0.005, z], ry: starRng.range(0, 6.28) });
+      const m = partMatrix({ p: [x, f.y + f.height - CEILING_DROP - 0.005, z], ry: starRng.range(0, 6.28) });
       pushBox(bucket(f.id, 'glowStar'), m, [s, 0, s], starRng.pick([0xd8ff9a, 0xfff6a0, 0xb0f0ff]), 1, { faces: [5], uvRect: starUV });
     }
   }

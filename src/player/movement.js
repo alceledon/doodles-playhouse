@@ -6,8 +6,13 @@
 import { PLAYER_BODY } from '../core/contracts.js';
 import { clamp } from '../core/math.js';
 
-/** Bottom of the body's blocking range above the feet: rugs (maxY < 0.05) never block. */
-export const FOOT_CLEARANCE = 0.05;
+/**
+ * Bottom of the body's blocking range above the feet, i.e. the step height:
+ * anything whose top is lower gets stepped over. Rugs need 0.05, but the top
+ * of every stair ramp meets the wall under the landing 0.19 m below the
+ * landing (a 3:4 ramp times the body radius), which jammed the player there.
+ */
+export const FOOT_CLEARANCE = 0.24;
 
 export const bodyHeight = (crouched) => (crouched ? PLAYER_BODY.crouchHeight : PLAYER_BODY.height);
 

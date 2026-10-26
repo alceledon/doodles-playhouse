@@ -52,6 +52,22 @@ test('the crawl tunnel lets you through crouched, not standing, and you cannot s
   assert.equal(canStand({ x: 2, z: 4.5 }, 0, world.colliders('ground')), true);
 });
 
+test('the wall under a landing does not stop you at the top of a stair ramp', () => {
+  // A 3:4 ramp rising toward +Z ends at z=5.5, flush with the lower floor's
+  // wall under the landing (top at y=3). Touching that wall, feet are 0.19 m
+  // below the landing, so the wall's top edge must count as a step.
+  const wall = { minX: 8, maxX: 9.5, minY: 0, maxY: 3, minZ: 5.5, maxZ: 5.6 };
+  const feetY = 3 - R * 0.75;
+  const boxes = overlappingY([wall], feetY, PLAYER_BODY.height);
+  assert.equal(boxes.length, 0);
+  const p = slideMove({ x: 8.75, z: 5.5 - R }, 0, 0.3, R, boxes);
+  assert.ok(p.z > 5.5, `moved onto the landing (z=${p.z})`);
+  // On the floor below, the same wall still blocks.
+  assert.equal(overlappingY([wall], 0, PLAYER_BODY.height).length, 1);
+  // A crate 0.25 m tall is not a step.
+  assert.equal(overlappingY([{ minX: 0, maxX: 1, minY: 0, maxY: 0.25, minZ: 0, maxZ: 1 }], 0, PLAYER_BODY.height).length, 1);
+});
+
 test('speeds: walk 3, sprint 5, crouch 1.5, battery caps at 2.2', () => {
   const m = tuningFor('normal').move;
   assert.equal(targetSpeed({}, m), 3);

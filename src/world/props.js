@@ -293,12 +293,13 @@ export function cabinet({ w = 0.8, h = 0.9, d = 0.5, color = C.white, door = C.t
     B(0, 0.05, 0, w, 0.1, d, 'wood', color), B(0, h * 0.55, 0.03, w - 2 * t, 0.02, d - 0.08, 'wood', color),
   ];
   const dw = w - 0.02;
-  // door hinged on the cabinet's left (local -X) front edge, swinging out toward -Z
+  // door hinged on the cabinet's left (local -X) front edge, swinging out toward -Z.
+  // Yawing by +a moves the free end (local +X) to (cos a, -sin a), so +a swings it out the front.
   const doorParts = [B(dw / 2, (h - 0.1) / 2, 0, dw, h - 0.12, 0.025, 'wood', door), SP(dw - 0.07, (h - 0.1) * 0.55, -0.03, 0.03, 'plastic', knob)];
   return {
     parts,
     colliders: [K(-w / 2, w / 2, 0, h, -d / 2, d / 2)],
-    moving: [{ pivot: [-w / 2 + 0.01, 0.1, -d / 2 - 0.0125], parts: doorParts, motion: { type: 'hinge', axis: 'y', angle: -1.9 } }],
+    moving: [{ pivot: [-w / 2 + 0.01, 0.1, -d / 2 - 0.0125], parts: doorParts, motion: { type: 'hinge', axis: 'y', angle: 1.9 } }],
     points: { use: [0, h * 0.5, -d / 2 - 0.02], item: [0, 0.11, -d / 2 + 0.18] },
   };
 }
@@ -318,8 +319,9 @@ export function wardrobeContainer({ w = 1.1, h = 1.8, d = 0.6, color = C.lilac, 
     parts,
     colliders: [K(-w / 2, w / 2, 0, h, -d / 2, d / 2)],
     moving: [
-      { pivot: [-w / 2 + 0.01, 0.11, -d / 2 - 0.0125], parts: left, motion: { type: 'hinge', axis: 'y', angle: -1.8 } },
-      { pivot: [w / 2 - 0.01, 0.11, -d / 2 - 0.0125], parts: right, motion: { type: 'hinge', axis: 'y', angle: 1.8 } },
+      // both doors swing out the front (-Z); see cabinet() for the sign convention
+      { pivot: [-w / 2 + 0.01, 0.11, -d / 2 - 0.0125], parts: left, motion: { type: 'hinge', axis: 'y', angle: 1.8 } },
+      { pivot: [w / 2 - 0.01, 0.11, -d / 2 - 0.0125], parts: right, motion: { type: 'hinge', axis: 'y', angle: -1.8 } },
     ],
     points: { use: [0, 1.0, -d / 2 - 0.02], item: [0, 0.11, -d / 2 + 0.2] },
   };
