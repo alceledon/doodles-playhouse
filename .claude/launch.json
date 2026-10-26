@@ -1,0 +1,35 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "game",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/serve.mjs", "8080"],
+      "port": 8080
+    },
+    {
+      "name": "world-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/serve.mjs", "8081"],
+      "port": 8081
+    },
+    {
+      "name": "doodle-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/serve.mjs", "8082"],
+      "port": 8082
+    },
+    {
+      "name": "gameplay-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/serve.mjs", "8083"],
+      "port": 8083
+    },
+    {
+      "name": "presentation-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/serve.mjs", "8084"],
+      "port": 8084
+    }
+  ]
+}

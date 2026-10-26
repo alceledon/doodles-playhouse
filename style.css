@@ -1,0 +1,25 @@
+/* Page shell only. The game UI's own styles live in src/ui/ui.css (Presentation). */
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #05040a;
+  color: #f3e9ff;
+  font-family: system-ui, sans-serif;
+}
+
+#game canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  image-rendering: pixelated; /* keep the low-res render crunchy, not blurry */
+}
+
+/* UI layer sits over the canvas. It passes clicks through to the canvas;
+   menus re-enable pointer events on themselves. */
+#ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}

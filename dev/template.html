@@ -1,0 +1,68 @@
+<!doctype html>
+<!--
+  DEV PAGE TEMPLATE (coordinator-owned). Copy this to dev/<area>.html and
+  replace the demo script. It boots the STUB world (the mini-house fixture)
+  and the STUB player, so you can drive around without main.js.
+
+  Serve the repo root (node tools/serve.mjs 8081) and open /dev/<area>.html.
+  Note the import map paths start with ../ because this page lives in dev/.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dev page template</title>
+  <link rel="stylesheet" href="../style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "../vendor/three/three.module.js",
+        "three/addons/": "../vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="game"></div>
+  <div id="ui"></div>
+  <pre id="info" style="position:fixed;left:8px;top:8px;margin:0;color:#9f9;font:12px monospace;background:rgba(0,0,0,.6);padding:6px"></pre>
+  <script type="module">
+    import * as THREE from 'three';
+    import { createBus, EVENTS } from '../src/core/events.js';
+    import { createRng } from '../src/core/rng.js';
+    import { createWorld } from '../src/core/stubs/world.js';
+    import { createGameplay } from '../src/core/stubs/gameplay.js';
+
+    const bus = createBus();
+    const rng = createRng(1);
+    const renderer = new THREE.WebGLRenderer();
+    renderer.setPixelRatio(0.75);
+    renderer.setSize(innerWidth, innerHeight);
+    document.getElementById('game').append(renderer.domElement);
+    const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 80);
+    const scene = new THREE.Scene();
+    scene.add(camera);
+
+    const world = createWorld({ scene, bus, rng: rng.fork('world'), difficulty: 'normal' });
+    const gameplay = createGameplay({ scene, camera, canvas: renderer.domElement, world, bus, rng: rng.fork('gameplay'), difficulty: 'normal' });
+    gameplay.startDay(1);
+    gameplay.setControlsEnabled(true); // click the canvas to lock the mouse
+
+    // Log every event so you can see what's flowing.
+    for (const type of Object.values(EVENTS)) if (type !== EVENTS.FOOTSTEP && type !== EVENTS.PROMPT) bus.on(type, (p) => console.log(type, p));
+    bus.on(EVENTS.PAUSE_REQUEST, () => {}); // Esc just unlocks the mouse here
+
+    let last = performance.now();
+    renderer.setAnimationLoop((now) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      gameplay.update(dt);
+      world.update(dt, gameplay.player.pos);
+      renderer.render(scene, camera);
+      const p = gameplay.player;
+      document.getElementById('info').textContent = `${p.floorId} (${p.pos.x.toFixed(2)}, ${p.pos.y.toFixed(2)}, ${p.pos.z.toFixed(2)})  click to look, WASD to move`;
+    });
+    window.__dev = { THREE, bus, world, gameplay, scene, camera };
+  </script>
+</body>
+</html>
