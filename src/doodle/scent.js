@@ -99,7 +99,7 @@ export function createScent(tuning, ranks) {
       if (dist2D(c.pos, at) <= reach(crumbRange, c.floorId)) best = { kind: 'crumb', pos: c.pos, floorId: c.floorId, t: c.t };
     }
     for (const p of pools) {
-      if (p.last <= after || p.last <= p.checkedAt || now < p.recheckAt) continue;
+      if (p.last <= after || p.last <= p.checkedAt || now < p.recheckAt) continue; // nothing new here
       if (dist2D(p.pos, at) > reach(poolRadius(p, now), p.floorId)) continue;
       if (!best || p.last >= best.t) best = { kind: 'pool', pos: p.pos, floorId: p.floorId, t: p.last, pool: p };
     }
@@ -112,9 +112,12 @@ export function createScent(tuning, ranks) {
     update,
     smell,
     poolRadius,
-    /** Doodle sniffed a pool and found nothing: skip it until the player adds to it again. */
+    /**
+     * Doodle sniffed a pool and found nothing: skip it until the player adds to
+     * it again, and in any case for `recheck` seconds.
+     */
     markChecked(pool, now, recheck = 0) {
-      pool.checkedAt = recheck > 0 ? -Infinity : pool.last;
+      pool.checkedAt = pool.last;
       pool.recheckAt = now + recheck;
     },
     clear() {

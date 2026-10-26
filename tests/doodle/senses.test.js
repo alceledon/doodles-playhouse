@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMiniHouse } from '../../src/core/fixtures/mini-house.js';
 import { tuningFor } from '../../src/doodle/tuning.js';
-import { floorRanks, hear, look, dartHits, sightRange } from '../../src/doodle/senses.js';
+import { floorRanks, hear, look, dartHits, sightRange, canReach } from '../../src/doodle/senses.js';
 import { createScent } from '../../src/doodle/scent.js';
 import { makePlayer } from './helpers.js';
 
@@ -66,6 +66,12 @@ test('sight: a 110° cone, range set by visibility, blocked by walls and closed 
   const hidden = makePlayer(8.5, 0, 2.5);
   hidden.hidden = true;
   assert.equal(look(d, hidden, world, N).reason, 'hidden');
+});
+
+test('reach: over a ball-pit rim, not through a wall', () => {
+  const world = createMiniHouse();
+  assert.ok(canReach(body(8.6, 2), makePlayer(9.3, 0, 2), world), 'leans over the 0.6 m rim');
+  assert.ok(!canReach(body(6.35, 6), makePlayer(5.6, 0, 6), world), 'hall/kitchen wall');
 });
 
 test('darts: ray vs bounds, stopped by walls', () => {

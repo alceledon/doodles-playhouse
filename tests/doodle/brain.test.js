@@ -116,6 +116,26 @@ test('a long hide gets sniffed out', () => {
   assert.equal(sim.doodle.floorId, 'upstairs');
 });
 
+test('keeping still in the dark nearby: it smells you, closes in and catches you', () => {
+  const sim = setup();
+  place(sim, 8.5, 5.5, 'ground', 0);
+  const player = makePlayer(8.5, 0, 2.5, 'ground', { vis: 0 }); // crouched in the dark: seen only up close
+  player.crouched = true;
+  assert.ok(sim.run(30, player, () => sim.count(EVENTS.CAUGHT) > 0));
+  assert.ok(states(sim).includes('sniff'));
+});
+
+test('scent it can smell but not reach (you, in a crawl tunnel) does not make it dither', () => {
+  const sim = setup();
+  place(sim, 2, 4.5, 'ground', -Math.PI / 2);
+  const player = makePlayer(3.75, 0, 4.5, 'ground', { vis: 0 });
+  player.crouched = true;
+  sim.run(40, player);
+  assert.equal(sim.count(EVENTS.CAUGHT), 0);
+  assert.ok(states(sim).includes('sniff'));
+  assert.ok(sim.count(EVENTS.DOODLE_STATE) < 25, `${sim.count(EVENTS.DOODLE_STATE)} state changes in 40 s`);
+});
+
 test('follows a scent trail to where it ends', () => {
   // The player walks from the kitchen through the door to the hall's far corner
   // while Doodle sleeps, then leaves (no more scent). Doodle wakes and tracks it.
@@ -150,6 +170,7 @@ test('CAUGHT is emitted exactly once per catch', () => {
   assert.equal(sim.count(EVENTS.CAUGHT), 1);
   assert.equal(sim.doodle.state, 'catch');
   assert.equal(sim.doodle.pose, 'pounce');
+  assert.equal(sim.doodle.mood, 'hunt');
   sim.run(3, player);
   assert.equal(sim.count(EVENTS.CAUGHT), 1, 'no repeats');
   // Next day: reset re-arms it.

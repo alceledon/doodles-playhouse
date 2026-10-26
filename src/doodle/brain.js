@@ -108,7 +108,7 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     stateTime = 0;
     goal = null; // the mover keeps any stairs it's halfway up; travel() re-plans after
     lungeLeft = 0;
-    doodle.mood = next === S.CHASE ? 'hunt' : 'calm';
+    doodle.mood = next === S.CHASE || next === S.CATCH ? 'hunt' : 'calm';
     if (next === prev) return;
     say(EVENTS.DOODLE_STATE, { state: next, prev });
     if (next === S.CHASE) say(EVENTS.SPOTTED, { pos: copy(doodle.pos) });
@@ -385,7 +385,7 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
         task.checkFor = 0;
         return;
       }
-      scent.markChecked(got.pool, clock);
+      scent.markChecked(got.pool, clock, T.poolRecheck);
     }
     task.after = got.t;
     const next = scent.smell(clock, doodle.pos, doodle.floorId, { after: task.after });
@@ -401,7 +401,7 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     const stillThere = hide && hide.spotId === pool.hideSpotId && player?.hidden;
     if (stillThere && task.checkFor >= 1 && clock - hide.since >= T.hideSniffTime) return catchPlayer('pulledOut');
     if (!stillThere || task.checkFor >= T.sniffCheckTime) {
-      scent.markChecked(pool, clock, stillThere ? T.poolRecheck : 0);
+      scent.markChecked(pool, clock, T.poolRecheck);
       setState(S.SEARCH, { center: copy(doodle.pos), floorId: doodle.floorId, left: T.searchTime * 0.5 });
     }
   }

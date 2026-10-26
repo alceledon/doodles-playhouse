@@ -123,10 +123,13 @@ export function look(doodle, player, world, tuning, { blind = false } = {}) {
   return out;
 }
 
-/** Body-height line between Doodle and the player is clear (no catching through walls or closed doors). */
+/**
+ * Nothing between Doodle and the player at snout height: no catching through
+ * walls or closed doors, but it can lean over a ball-pit rim or a low counter.
+ */
 export function canReach(doodle, player, world) {
-  const a = { x: doodle.pos.x, y: doodle.pos.y + 0.5, z: doodle.pos.z };
-  const b = { x: player.pos.x, y: player.pos.y + 0.5, z: player.pos.z };
+  const a = { x: doodle.pos.x, y: doodle.pos.y + 1.0, z: doodle.pos.z };
+  const b = { x: player.pos.x, y: player.pos.y + 1.0, z: player.pos.z };
   return !segmentBlocked(world, [doodle.floorId], a, b);
 }
 

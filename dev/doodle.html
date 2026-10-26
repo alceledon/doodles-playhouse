@@ -1,0 +1,293 @@
+<!doctype html>
+<!--
+  DOODLE DEV PAGE. The stub world (mini-house fixture) and stub player, plus
+  the real Doodle from src/doodle/ with its debug overlay.
+
+  Serve the repo root (node tools/serve.mjs 8082, or the doodle-dev launch
+  config) and open /dev/doodle.html. Params: ?difficulty=easy|normal|hard,
+  ?seed=N, ?view=player|chase|map, ?wake=seconds.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Doodle dev page</title>
+  <link rel="stylesheet" href="../style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "../vendor/three/three.module.js",
+        "three/addons/": "../vendor/three/addons/"
+      }
+    }
+  </script>
+  <style>
+    #info { position: fixed; left: 8px; top: 8px; margin: 0; color: #9f9; font: 12px monospace; background: rgba(0,0,0,.6); padding: 6px 8px; pointer-events: none; white-space: pre; }
+    #banner { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); font: bold 42px monospace; color: #ff4a3a; text-shadow: 0 0 12px #000; pointer-events: none; display: none; }
+    #log { position: fixed; right: 8px; top: 8px; margin: 0; max-width: 46vw; color: #cde; font: 11px monospace; background: rgba(0,0,0,.55); padding: 6px 8px; pointer-events: none; white-space: pre; }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+  <div id="ui"></div>
+  <pre id="info"></pre>
+  <pre id="log"></pre>
+  <div id="banner"></div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { createBus, EVENTS } from '../src/core/events.js';
+    import { createRng } from '../src/core/rng.js';
+    import { DOODLE_POSES, PLAYER_BODY } from '../src/core/contracts.js';
+    import { AGENTS, isPassable, worldToCell } from '../src/core/navgrid.js';
+    import { createWorld } from '../src/core/stubs/world.js';
+    import { createGameplay } from '../src/core/stubs/gameplay.js';
+    import { createDoodle } from '../src/doodle/index.js';
+    import { segmentBlocked } from '../src/doodle/senses.js';
+
+    const params = new URLSearchParams(location.search);
+    let difficulty = ['easy', 'normal', 'hard'].includes(params.get('difficulty')) ? params.get('difficulty') : 'normal';
+    const seed = params.has('seed') ? Number(params.get('seed')) : 1;
+    const wake = params.has('wake') ? Number(params.get('wake')) : 3;
+
+    const bus = createBus();
+    const rng = createRng(seed);
+    const renderer = new THREE.WebGLRenderer();
+    renderer.setPixelRatio(0.75);
+    renderer.setSize(innerWidth, innerHeight);
+    document.getElementById('game').append(renderer.domElement);
+    const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 80);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x07060c);
+    scene.add(camera);
+
+    const world = createWorld({ scene, bus, rng: rng.fork('world'), difficulty });
+    const gameplay = createGameplay({ scene, camera, canvas: renderer.domElement, world, bus, rng: rng.fork('gameplay'), difficulty });
+    gameplay.startDay(1);
+    gameplay.setControlsEnabled(true); // click the canvas to lock the mouse
+    const player = gameplay.player;
+    bus.on(EVENTS.PAUSE_REQUEST, () => {}); // Esc just unlocks the mouse here
+
+    // ---- the real Doodle -------------------------------------------------------
+    let doodle = null;
+    function spawnDoodle() {
+      doodle?.dispose();
+      doodle = createDoodle({ scene, world, bus, rng: rng.fork(`doodle-${difficulty}`), difficulty });
+      doodle.reset(world.anchors.kennel, { wakeDelay: wake });
+      doodle.setActive(true);
+      doodle.debug.overlay(true);
+      window.__dev.doodle = doodle;
+    }
+
+    // ---- props the dev keys drop ---------------------------------------------------
+    const propMat = (color) => new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: 0.25 });
+    const treats = new Map();
+    let treatN = 0;
+    const ballMesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.075, 1), propMat(0xc9e046));
+    ballMesh.visible = false;
+    scene.add(ballMesh);
+    let ballState = 'held'; // held | world | doodle
+    const dartLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineBasicMaterial({ color: 0xff60c0 }));
+    dartLine.visible = false;
+    scene.add(dartLine);
+    let dartFlash = 0;
+
+    const floorY = (floorId) => world.nav.floors[floorId].y;
+    const here = () => ({ x: player.pos.x, y: floorY(player.floorId), z: player.pos.z });
+
+    function dropTreat() {
+      const id = `devTreat${++treatN}`;
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.05, 0.07), propMat(0x8a4a20));
+      const pos = here();
+      mesh.position.set(pos.x, pos.y + 0.03, pos.z);
+      scene.add(mesh);
+      treats.set(id, mesh);
+      bus.emit(EVENTS.TREAT_DROPPED, { treatId: id, pos, floorId: player.floorId });
+    }
+
+    /** Roll the ball forward along the floor until it would hit something. */
+    function throwBall() {
+      if (ballState !== 'held') return say(`ball is ${ballState === 'doodle' ? "in Doodle's mouth" : 'on the floor (P picks it up)'}`);
+      const dir = { x: -Math.sin(player.yaw), z: -Math.cos(player.yaw) };
+      let land = here();
+      for (let d = 0.5; d <= 7; d += 0.25) {
+        const p = { x: player.pos.x + dir.x * d, y: land.y, z: player.pos.z + dir.z * d };
+        const cell = worldToCell(world.nav, player.floorId, p.x, p.z);
+        if (!cell || !isPassable(world.nav, cell, AGENTS.PLAYER)) break;
+        land = p;
+      }
+      bus.emit(EVENTS.BALL_THROWN, { pos: player.eyePos(), floorId: player.floorId });
+      bus.emit(EVENTS.BALL_LANDED, { pos: land, floorId: player.floorId });
+      bus.emit(EVENTS.NOISE, { pos: land, floorId: player.floorId, loudness: 8, kind: 'ball' });
+      ballMesh.position.set(land.x, land.y + 0.075, land.z);
+      ballMesh.visible = true;
+      ballState = 'world';
+    }
+
+    function pickUpBall() {
+      if (ballState !== 'world') return;
+      if (Math.hypot(ballMesh.position.x - player.pos.x, ballMesh.position.z - player.pos.z) > 1.6) return say('too far from the ball');
+      ballMesh.visible = false;
+      ballState = 'held';
+      bus.emit(EVENTS.PICKUP, { itemId: 'tennisBall' });
+    }
+
+    function fireDart() {
+      const origin = camera.getWorldPosition(new THREE.Vector3());
+      const dir = camera.getWorldDirection(new THREE.Vector3());
+      bus.emit(EVENTS.DART_FIRED, { origin: { x: origin.x, y: origin.y, z: origin.z }, dir: { x: dir.x, y: dir.y, z: dir.z }, range: 25 });
+      dartLine.geometry.setFromPoints([origin, origin.clone().addScaledVector(dir, 25)]);
+      dartLine.visible = true;
+      dartFlash = 0.4;
+    }
+
+    bus.on(EVENTS.TREAT_EATEN, ({ treatId }) => {
+      const m = treats.get(treatId);
+      if (m) scene.remove(m);
+      treats.delete(treatId);
+    });
+    bus.on(EVENTS.BALL_FETCHED, () => {
+      ballMesh.visible = false;
+      ballState = 'doodle';
+    });
+    bus.on(EVENTS.BALL_RETURNED, ({ pos }) => {
+      ballMesh.position.set(pos.x, pos.y + 0.075, pos.z);
+      ballMesh.visible = true;
+      ballState = 'world';
+    });
+
+    // ---- catches -----------------------------------------------------------------
+    const banner = document.getElementById('banner');
+    let caughtTimer = 0;
+    bus.on(EVENTS.CAUGHT, ({ how }) => {
+      banner.textContent = `CAUGHT (${how})`;
+      banner.style.display = 'block';
+      doodle.setActive(false);
+      caughtTimer = 2.5;
+    });
+    function nextDay() {
+      banner.style.display = 'none';
+      if (player.hidden) bus.emit(EVENTS.UNHIDE, { spotId: player.hideSpotId });
+      gameplay.startDay(1);
+      doodle.reset(world.anchors.kennel, { wakeDelay: wake });
+      doodle.setActive(true);
+    }
+
+    // ---- pose preview (M cycles DOODLE_POSES with the AI frozen; R resumes) ----------
+    let poseIdx = -1;
+    function nextPose() {
+      poseIdx = (poseIdx + 1) % DOODLE_POSES.length;
+      doodle.setActive(false);
+      doodle.model.setPose(DOODLE_POSES[poseIdx], { loop: true });
+      say(`pose: ${DOODLE_POSES[poseIdx]} (H toggles mood, R resumes)`);
+    }
+
+    // ---- views ---------------------------------------------------------------------
+    const views = ['player', 'chase', 'map'];
+    let view = views.includes(params.get('view')) ? params.get('view') : 'player';
+    const chaseCam = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.05, 80);
+    const mapCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 10);
+    function placeViews() {
+      const d = doodle.model.object3d.position;
+      // Face cam: the first spot around Doodle (front-right first) with a clear line to it.
+      const head = { x: d.x, y: d.y + 1.0, z: d.z };
+      for (const a of [0.6, -0.6, 1.3, -1.3, 2.2, -2.2, Math.PI]) {
+        const yaw = doodle.yaw + a;
+        const c = { x: d.x - Math.sin(yaw) * 2.6, y: d.y + 1.5, z: d.z - Math.cos(yaw) * 2.6 };
+        if (!worldToCell(world.nav, doodle.floorId, c.x, c.z) || segmentBlocked(world, [doodle.floorId], c, head)) continue;
+        chaseCam.position.set(c.x, c.y, c.z);
+        break;
+      }
+      chaseCam.lookAt(head.x, d.y + 0.7, head.z);
+      // Top-down just under the ceiling of the floor Doodle is on.
+      const fy = floorY(doodle.floorId);
+      const aspect = innerWidth / innerHeight;
+      const half = 4.8;
+      mapCam.left = -half * aspect;
+      mapCam.right = half * aspect;
+      mapCam.top = half;
+      mapCam.bottom = -half;
+      mapCam.position.set(6, fy + 2.85, 4);
+      mapCam.up.set(0, 0, -1);
+      mapCam.lookAt(6, fy, 4);
+      mapCam.updateProjectionMatrix();
+    }
+
+    // ---- keys ----------------------------------------------------------------------
+    addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      switch (e.code) {
+        case 'KeyT': return dropTreat();
+        case 'KeyB': return throwBall();
+        case 'KeyP': return pickUpBall();
+        case 'KeyX': return fireDart();
+        case 'KeyO': return say(`overlay ${doodle.debug.overlay() ? 'on' : 'off'}`);
+        case 'KeyR': return nextDay();
+        case 'KeyM': return nextPose();
+        case 'KeyH': return doodle.model.setMood(doodle.model.mood === 'hunt' ? 'calm' : 'hunt');
+        case 'KeyV': view = views[(views.indexOf(view) + 1) % views.length]; return say(`view: ${view}`);
+        case 'Digit1': case 'Digit2': case 'Digit3':
+          difficulty = ['easy', 'normal', 'hard'][Number(e.code.at(-1)) - 1];
+          spawnDoodle();
+          return say(`difficulty: ${difficulty}`);
+      }
+    });
+
+    // ---- event log -----------------------------------------------------------------
+    const logLines = [];
+    const logBox = document.getElementById('log');
+    let t = 0;
+    function say(text) {
+      logLines.push(`${t.toFixed(1).padStart(6)}  ${text}`);
+      while (logLines.length > 18) logLines.shift();
+      logBox.textContent = logLines.join('\n');
+    }
+    const quiet = new Set([EVENTS.FOOTSTEP, EVENTS.PROMPT]);
+    for (const type of Object.values(EVENTS)) if (!quiet.has(type)) bus.on(type, (p) => {
+      const brief = JSON.stringify(p, (k, v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v));
+      say(`${type} ${brief === '{}' ? '' : brief}`);
+    });
+
+    // ---- loop ----------------------------------------------------------------------
+    const info = document.getElementById('info');
+    const f = (n) => n.toFixed(1);
+    let last = performance.now();
+    renderer.setAnimationLoop((now) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      t += dt;
+      gameplay.update(dt);
+      doodle.update(dt, player);
+      world.update(dt, player.pos);
+      if (caughtTimer > 0 && (caughtTimer -= dt) <= 0) nextDay();
+      if (dartFlash > 0 && (dartFlash -= dt) <= 0) dartLine.visible = false;
+      placeViews();
+      renderer.render(scene, view === 'chase' ? chaseCam : view === 'map' ? mapCam : camera);
+
+      const s = doodle.debug.senses;
+      const sight = s.sight ?? {};
+      info.textContent = [
+        `DOODLE  ${doodle.state}${s.task ? ' / ' + s.task : ''}   ${difficulty}   ${doodle.active ? '' : '(inactive)'}`,
+        `  ${doodle.floorId} (${f(doodle.pos.x)}, ${f(doodle.pos.y)}, ${f(doodle.pos.z)})  speed ${f(doodle.speed)}  pose ${doodle.model.pose}  mood ${doodle.model.mood}${doodle.carrying ? '  carrying ' + doodle.carrying : ''}`,
+        `  sight ${sight.visible ? 'SEES YOU' : sight.reason ?? ''}  dist ${Number.isFinite(sight.dist) ? f(sight.dist) : '-'}  range ${f(s.sightRange ?? 0)}  awareness ${(s.awareness ?? 0).toFixed(2)}`,
+        `  heard ${s.lastHeard ? `${s.lastHeard.kind} ${f(s.clock - s.lastHeard.t)}s ago` : '-'}   crumbs ${s.crumbs?.length ?? 0}  pools ${s.pools?.length ?? 0}  treats ${treats.size}  ball ${ballState}`,
+        `PLAYER  ${player.floorId} (${f(player.pos.x)}, ${f(player.pos.y)}, ${f(player.pos.z)})  vis ${player.visibility().toFixed(2)}${player.hidden ? '  HIDDEN' : ''}${player.crouched ? '  crouched' : ''}${player.flashlightOn ? '  flashlight' : ''}`,
+        `view ${view}`,
+        '',
+        'click: mouse look   WASD move   Shift sprint   C crouch   F flashlight   E doors / hide   N loud noise',
+        'T treat   B throw ball   P pick up ball   X dart   O overlay   R reset day   V view   M poses   H mood   1/2/3 difficulty',
+      ].join('\n');
+    });
+
+    addEventListener('resize', () => {
+      for (const c of [camera, chaseCam]) {
+        c.aspect = innerWidth / innerHeight;
+        c.updateProjectionMatrix();
+      }
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    window.__dev = { THREE, bus, world, gameplay, player, scene, camera, renderer, PLAYER_BODY, setView: (v) => (view = v) };
+    spawnDoodle();
+  </script>
+</body>
+</html>
