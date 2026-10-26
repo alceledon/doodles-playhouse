@@ -129,7 +129,8 @@ coordinator.
 | Caught | Doodle: `CAUGHT {how}`, once | main.js (freeze, cutscene, next day or game over) |
 | Doors / containers | World: `DOOR_OPENED`, `DOOR_CLOSED`, `CONTAINER_OPENED`, `CONTAINER_CLOSED` (+ `NOISE`) | Audio |
 | Run flow | main.js: `RUN_START`, `DAY_START`, `WON`, `GAME_OVER`, `PAUSED`, `RESUMED` | anyone |
-| Settings | UI: `SETTINGS_CHANGED {settings}` | main.js (quality, volume), Gameplay (sensitivity, invert Y) |
+| Settings | UI: `SETTINGS_CHANGED {settings}` | main.js (quality, volume), Gameplay (sensitivity, touch sensitivity, invert Y) |
+| Input mode flips (touch / mouse+keyboard) | main.js's watcher (`src/core/device.js`): `INPUT_MODE {mode}` | Gameplay (touch controls, no pointer lock), UI (touch wording, layout, menus), main.js (rotate overlay) |
 
 Doodle opens doors by calling `door.setOpen(true, 'doodle')` when its path crosses a closed,
 unlocked door's cells.
@@ -143,6 +144,10 @@ CAUGHT  → freeze → gameplay.onCaught() → playCatch → next day   (day 5: 
 ESCAPED → freeze → playEscape → ui.recordTime → ui.showWin → title
 PAUSE_REQUEST → freeze → ui.showPause → resume (unfreeze) | quit (title)
 ```
+- **Phones and tablets:** `src/core/device.js` decides the input mode (touch when the primary
+  pointer is coarse or a finger touches; desktop on a key press or real mouse movement), and
+  `getInputMode()` reports it. On a narrow portrait touch screen main.js shows the "rotate your
+  phone" overlay from index.html and pauses.
 - **"Freeze"** means:
   - `gameplay.setControlsEnabled(false)` and `exitPointerLock()`.
   - `doodle.setActive(false)`.

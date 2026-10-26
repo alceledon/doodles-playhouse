@@ -40,13 +40,23 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start; /* centered by the auto margins below, so a tall screen scrolls from its top */
   gap: 18px;
-  padding: 24px 16px;
+  padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y; /* the page itself blocks touch gestures (style.css); menus scroll */
   pointer-events: auto;
   background: radial-gradient(ellipse at 50% 35%, rgba(42, 31, 61, 0.94), rgba(7, 6, 12, 0.97) 70%);
   animation: dp-fade-in 0.25s ease-out both;
+}
+/* Same as justify-content: center while it fits; when it doesn't, nothing is cut off above. */
+.dp-screen:not(.dp-title) > :first-child {
+  margin-top: auto;
+}
+.dp-screen:not(.dp-title) > :last-child {
+  margin-bottom: auto;
 }
 .dp-screen.dp-leaving {
   animation: dp-fade-out 0.25s ease-in both;
@@ -100,13 +110,22 @@
   cursor: pointer;
   transition: transform 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s;
 }
-.dp-btn:hover,
 .dp-btn:focus-visible {
   outline: none;
   transform: translateY(-2px) rotate(-0.6deg);
   border-color: var(--yellow);
   background: var(--plum-3);
   box-shadow: 0 0 0 3px rgba(255, 228, 92, 0.15), 0 6px 18px rgba(0, 0, 0, 0.4);
+}
+/* Hover only where there's a real hover: on touch screens it sticks after a tap. */
+@media (hover: hover) {
+  .dp-btn:hover {
+    outline: none;
+    transform: translateY(-2px) rotate(-0.6deg);
+    border-color: var(--yellow);
+    background: var(--plum-3);
+    box-shadow: 0 0 0 3px rgba(255, 228, 92, 0.15), 0 6px 18px rgba(0, 0, 0, 0.4);
+  }
 }
 .dp-btn:active {
   transform: translateY(1px);
@@ -121,18 +140,24 @@
   font-size: 16px;
   padding: 6px 12px;
 }
-.dp-btn.dp-quiet:hover,
 .dp-btn.dp-quiet:focus-visible {
   color: var(--ink);
   border-color: var(--line);
   background: rgba(59, 44, 85, 0.5);
+}
+@media (hover: hover) {
+  .dp-btn.dp-quiet:hover {
+    color: var(--ink);
+    border-color: var(--line);
+    background: rgba(59, 44, 85, 0.5);
+  }
 }
 
 /* ---- title -------------------------------------------------------------- */
 
 .dp-title {
   justify-content: flex-start;
-  padding-top: max(24px, 4vh);
+  padding-top: max(24px, 4vh, env(safe-area-inset-top));
   background: radial-gradient(ellipse at 50% 20%, #2a1d40 0%, #120d1c 55%, #05040a 100%);
 }
 .dp-title-art {
@@ -587,4 +612,115 @@
 .dp-endline canvas {
   max-width: 92vw;
   height: auto !important;
+}
+
+/* ---- touch (the layer gets .dp-touch in touch mode; controls are in style.css) ---- */
+
+/* Finger-sized menu buttons (Apple's 44 pt minimum). */
+.dp-touch .dp-btn {
+  min-height: 44px;
+}
+
+/* The held item moves top-left: the bottom-right corner is the touch buttons'. */
+.dp-touch .dp-held {
+  right: auto;
+  bottom: auto;
+  left: max(16px, env(safe-area-inset-left));
+  top: max(14px, env(safe-area-inset-top));
+  flex-direction: row;
+  gap: 8px;
+  transform: translateY(-10px);
+}
+.dp-touch .dp-held.dp-on {
+  transform: none;
+}
+.dp-touch .dp-held-icon {
+  width: 64px;
+  height: 64px;
+}
+.dp-touch .dp-stamina {
+  bottom: max(18px, calc(8px + env(safe-area-inset-bottom)));
+}
+.dp-touch .dp-prompt {
+  max-width: 60vw;
+  white-space: normal;
+}
+
+/* ---- short screens: a phone in landscape (~375 px tall) ---- */
+
+@media (max-height: 500px) {
+  .dp-screen {
+    gap: 10px;
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  /* Crayon headings scale down to leave room for the buttons (the day card keeps its size). */
+  .dp-screen:not(.dp-daycard):not(.dp-title) > canvas.crayon {
+    width: auto !important;
+    height: auto !important;
+    max-width: 92vw;
+    max-height: 24vh;
+  }
+  .dp-title {
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
+  .dp-title-art {
+    width: min(820px, 92vw, 100vh);
+  }
+  .dp-tagline {
+    margin: -4px 0 0;
+    font-size: 14px;
+  }
+  .dp-difficulties {
+    grid-template-columns: repeat(4, minmax(118px, 190px));
+    gap: 8px;
+  }
+  .dp-card {
+    min-height: 0;
+    gap: 3px;
+    padding: 8px 10px;
+  }
+  .dp-card .dp-card-name {
+    font-size: 18px;
+  }
+  .dp-card .dp-card-line {
+    font-size: 12px;
+    line-height: 1.25;
+  }
+  .dp-btn {
+    padding: 8px 18px;
+    font-size: 16px;
+  }
+  .dp-panel {
+    padding: 12px 18px;
+  }
+  .dp-panel p {
+    margin-bottom: 8px;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  .dp-keys {
+    margin-top: 8px;
+    font-size: 14px;
+  }
+  .dp-setting {
+    margin: 8px 0;
+  }
+  .dp-sub {
+    font-size: 15px;
+  }
+  .dp-stats {
+    gap: 2px 22px;
+    font-size: 16px;
+  }
+  .dp-daycard .dp-days-left {
+    font-size: 17px;
+  }
+}
+
+/* Narrow and short (a small phone on its side): two columns of difficulty cards. */
+@media (max-height: 500px) and (max-width: 620px) {
+  .dp-difficulties {
+    grid-template-columns: repeat(2, minmax(118px, 240px));
+  }
 }

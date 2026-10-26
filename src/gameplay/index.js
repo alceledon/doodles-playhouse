@@ -3,7 +3,7 @@
 // held-item view model into the Gameplay object from contracts.js.
 //
 //   rules.js       what everything means (pure, tested)
-//   ../player/     input, movement, camera, hiding, slides and tunnels
+//   ../player/     input, movement, camera, hiding, slides and tunnels, touch controls
 //   view.js        meshes for items, lock hardware, code digits, traps, ball, darts
 //   viewmodel.js   the item in your hand
 
@@ -13,6 +13,7 @@ import { ITEM_IDS, SETTINGS_DEFAULTS, STOREY_HEIGHT } from '../core/contracts.js
 import { copy, dist2D } from '../core/math.js';
 import { circleHitsAny } from '../player/movement.js';
 import { createPlayerController } from '../player/controller.js';
+import { createTouchControls } from '../player/touch.js';
 import { tuningFor } from './tuning.js';
 import { createRules } from './rules.js';
 import { firstBoxHit, isOccluded } from './raycast.js';
@@ -49,6 +50,20 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
   const player = controller.player;
   const view = createGameplayView({ scene, camera, world, rules, tuning, bus });
   const viewModel = createViewModel({ camera, kit: view.kit });
+  // Shown only in touch mode (core/device.js); under the UI layer so menus cover it.
+  const touch = createTouchControls({
+    mount: canvas.parentElement ?? document.body,
+    controller,
+    bus,
+    heldItemId: () => rules.items.heldItemId(),
+    actions: {
+      interact: () => primary(),
+      use: () => secondary(),
+      drop: () => dropHeld(),
+      tap: (x, y) => tapAt(x, y),
+      pause: () => controller.requestPause(),
+    },
+  });
 
   // ---- what you're looking at -----------------------------------------------------
   const raycaster = new THREE.Raycaster();
@@ -58,8 +73,11 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
 
   function findTarget() {
     if (player.hidden || controller.isRiding()) return null;
-    const eye = player.eyePos();
-    const dir = controller.forward();
+    return targetAlong(player.eyePos(), controller.forward());
+  }
+
+  /** The usable thing a ray from `eye` along unit `dir` hits first: in reach and not behind a wall. */
+  function targetAlong(eye, dir) {
     raycaster.set(rayO.set(eye.x, eye.y, eye.z), rayD.set(dir.x, dir.y, dir.z));
     raycaster.far = tuning.reach;
     const hits = [];
@@ -83,6 +101,27 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
       if (inside) best = inside;
     }
     return best.tag;
+  }
+
+  // A touch tap aims through the tapped pixel instead of the screen center.
+  const tapCaster = new THREE.Raycaster();
+  const tapNdc = new THREE.Vector2();
+  /** Tap at client (x, y): interact with what's under it if it's in reach. Returns true if it did something. */
+  function tapAt(x, y) {
+    if (!controller.isEnabled() || controller.isRiding()) return false;
+    if (player.hidden) {
+      controller.unhide(); // like a click while hidden: the prompt says "Tap: stop hiding"
+      return true;
+    }
+    const r = canvas.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    tapNdc.set(((x - r.left) / r.width) * 2 - 1, 1 - ((y - r.top) / r.height) * 2);
+    camera.updateMatrixWorld();
+    tapCaster.setFromCamera(tapNdc, camera);
+    const hit = targetAlong(tapCaster.ray.origin, tapCaster.ray.direction);
+    if (!hit) return false;
+    handle(rules.interact(hit, player));
+    return true;
   }
 
   // ---- prompts ------------------------------------------------------------------------
@@ -241,6 +280,7 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     target = findTarget();
     updatePrompt(dt);
     viewModel.update(dt, rules.items.heldItemId(), !player.hidden, controller.bob());
+    touch.update();
   }
 
   function startDay() {
@@ -262,6 +302,7 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
 
   function setControlsEnabled(enabled) {
     controller.setEnabled(enabled);
+    touch.setEnabled(enabled); // hidden with the HUD during menus and cutscenes
     if (!enabled) {
       messageLeft = 0;
       setPrompt(null);
@@ -293,6 +334,9 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     interact: () => primary(),
     use: () => secondary(),
     drop: () => dropHeld(),
+    /** A touch tap at client (x, y), as touch.js sends it. */
+    tap: (x, y) => tapAt(x, y),
+    touch,
   };
 
   return {
@@ -304,6 +348,7 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     requestPointerLock: () => controller.requestPointerLock(),
     exitPointerLock: () => controller.exitPointerLock(),
     dispose() {
+      touch.dispose();
       controller.dispose();
       viewModel.dispose();
       view.dispose();

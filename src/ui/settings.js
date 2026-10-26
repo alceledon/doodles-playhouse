@@ -27,12 +27,15 @@ export function sanitizeSettings(raw) {
   const s = raw && typeof raw === 'object' ? raw : {};
   const d = SETTINGS_DEFAULTS;
   const sens = num(s.mouseSensitivity);
+  const touch = num(s.touchSensitivity);
   const vol = num(s.volume);
+  const sensitivity = (v, fallback) => (v === null ? fallback : Math.round(clamp(v, SENSITIVITY_RANGE.min, SENSITIVITY_RANGE.max) * 100) / 100);
   return {
-    mouseSensitivity: sens === null ? d.mouseSensitivity : Math.round(clamp(sens, SENSITIVITY_RANGE.min, SENSITIVITY_RANGE.max) * 100) / 100,
+    mouseSensitivity: sensitivity(sens, d.mouseSensitivity),
     invertY: typeof s.invertY === 'boolean' ? s.invertY : d.invertY,
     volume: vol === null ? d.volume : Math.round(clamp(vol, 0, 1) * 100) / 100,
     quality: QUALITIES.includes(s.quality) ? s.quality : d.quality,
+    touchSensitivity: sensitivity(touch, d.touchSensitivity),
   };
 }
 

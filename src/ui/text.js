@@ -60,7 +60,38 @@ export const HOW_TO_PLAY = Object.freeze({
     ['F', 'Flashlight'],
     ['Esc', 'Pause'],
   ],
+  // Shown instead of `controls` in touch mode (core/device.js).
+  touchControls: [
+    ['Left thumb', 'Move (push to the edge to sprint)'],
+    ['Right thumb', 'Drag to look around'],
+    ['Tap', 'Pick up, open, hide, use: tap the thing'],
+    ['Hand', 'The same for what’s in the middle (it lights up)'],
+    ['Use', 'Use the held item: throw, drop a treat, fire'],
+    ['Drop', 'Drop the held item'],
+    ['Crouch', 'Crouch / crawl (silent)'],
+    ['Light', 'Flashlight'],
+    ['Pause', 'Pause (top corner)'],
+  ],
 });
+
+/**
+ * A Gameplay prompt in the current input mode's words. Gameplay writes them
+ * for the mouse ("Click: open the door · Right click: back", "Crouch (C)");
+ * touch says Tap, Use and Crouch instead.
+ * @param {string|null} text
+ * @param {'touch'|'desktop'} mode
+ */
+export function promptFor(text, mode) {
+  if (!text || mode !== 'touch') return text;
+  return text
+    .replace(/Right click/g, 'Use')
+    .replace(/\bClick\b/g, 'Tap')
+    .replace(/^E: /, 'Tap: ')
+    .replace(/ \([A-Z]\)/g, '');
+}
+
+/** The pause screen's hint line. */
+export const pauseHint = (mode) => (mode === 'touch' ? 'Tap Resume to keep playing.' : 'Click Resume to grab the mouse again.');
 
 /** 0:42, 12:05, 1:02:09. Negative or junk input shows 0:00. */
 export function formatTime(seconds) {

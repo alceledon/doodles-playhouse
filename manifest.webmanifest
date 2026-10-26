@@ -1,0 +1,15 @@
+{
+  "name": "Doodle's Playhouse",
+  "short_name": "Doodle's",
+  "description": "A first-person horror game: escape the playhouse in 5 days before Doodle the golden doodle catches you.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#05040a",
+  "theme_color": "#05040a",
+  "icons": [
+    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

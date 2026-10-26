@@ -189,6 +189,14 @@ function.
 | F | Flashlight |
 | Esc | Pause |
 
+On phones and tablets (Granny's mobile scheme; see `src/gameplay/README.md`):
+- **Left half:** a stick appears where your thumb lands. Push it to the rim to sprint.
+- **Right half:** drag to look. A quick tap uses whatever is under your finger.
+- **Buttons:** a hand (interact with what's in the middle, lit when there's something), Use,
+  Drop, Crouch, Flashlight, and Pause in the top corner.
+- **Phones** play in landscape; held upright they show "Rotate your phone" and pause.
+- **Settings** adds a touch look sensitivity.
+
 ## HUD and menus
 - **HUD (Granny-minimal):**
   - A center dot that becomes a hand when you look at something you can use.

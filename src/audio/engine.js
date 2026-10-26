@@ -31,7 +31,8 @@ export function createEngine() {
   /** Create or resume the context. Returns true if it exists. */
   function start() {
     if (ac) {
-      if (ac.state === 'suspended') ac.resume().catch(() => {});
+      // 'interrupted' is Safari's state after an app switch or a phone call.
+      if (ac.state === 'suspended' || ac.state === 'interrupted') ac.resume().catch(() => {});
       return true;
     }
     const Ctx = globalThis.AudioContext ?? globalThis.webkitAudioContext;

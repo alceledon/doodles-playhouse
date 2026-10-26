@@ -12,12 +12,14 @@
 //   ?stub=world,doodle   force stubs for these areas (world, gameplay, doodle, ui, audio)
 //   ?tick=timer          drive requestAnimationFrame from setTimeout (automated tests in a
 //                        browser pane that isn't painting, where rAF never fires)
+//   ?input=touch         start in touch (or desktop) input mode instead of detecting it
 
 import * as THREE from 'three';
 import { createBus, EVENTS } from './core/events.js';
 import { createGameState, PHASES } from './core/game.js';
 import { createRng, randomSeed } from './core/rng.js';
 import { DIFFICULTIES, SETTINGS_DEFAULTS } from './core/contracts.js';
+import { INPUT_MODES, getInputMode, needsRotate, startInputModeWatcher } from './core/device.js';
 import { REAL_AREAS } from './areas.js';
 
 const params = new URLSearchParams(location.search);
@@ -63,6 +65,8 @@ async function loadArea(name) {
 
 const bus = createBus();
 const state = createGameState();
+// Before anything reads the mode: UI and Gameplay take the current one and follow EVENTS.INPUT_MODE.
+startInputModeWatcher({ bus, forced: params.get('input') });
 const container = document.getElementById('game');
 const uiRoot = document.getElementById('ui');
 
@@ -80,11 +84,34 @@ function applySettings(s) {
   renderer.setSize(innerWidth, innerHeight);
   audio?.setVolume(s.volume);
 }
-addEventListener('resize', () => {
+function fitToWindow() {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
-});
+  checkRotate();
+}
+addEventListener('resize', fitToWindow);
+// iOS can report the old size during a rotation; measure again once it settles.
+addEventListener('orientationchange', () => setTimeout(fitToWindow, 300));
+
+// ---------------------------------------------------------------------------
+// Phones and tablets (page-shell side; the controls are src/player/touch.js)
+// ---------------------------------------------------------------------------
+
+// Phones play sideways. The overlay in index.html covers everything, and the game pauses under it.
+const rotateBox = document.getElementById('rotate');
+function checkRotate() {
+  if (!rotateBox) return;
+  const show = needsRotate({ width: innerWidth, height: innerHeight, touch: getInputMode() === INPUT_MODES.TOUCH });
+  rotateBox.hidden = !show;
+  if (show && run && !run.busy && state.phase === PHASES.PLAYING) run.bus.emit(EVENTS.PAUSE_REQUEST, {});
+}
+bus.on(EVENTS.INPUT_MODE, () => checkRotate());
+
+// iOS starts (and, after an app switch, resumes) audio only inside a touch/click handler.
+for (const type of ['touchend', 'pointerup', 'click']) addEventListener(type, () => audio?.unlock(), true);
+// Safari's own pinch gesture, which ignores user-scalable=no.
+document.addEventListener('gesturestart', (e) => e.preventDefault());
 
 let mods = {};
 let ui = null;
@@ -138,6 +165,7 @@ function unfreeze() {
   run.gameplay.setControlsEnabled(true);
   run.doodle?.setActive(true);
   run.gameplay.requestPointerLock(); // may be refused without a fresh click; Gameplay re-locks on canvas click
+  checkRotate(); // a phone held upright pauses right away
 }
 
 async function startDay() {
@@ -285,6 +313,7 @@ async function boot() {
   cutscenes = mods.ui.createCutscenes({ camera, getScene: () => scene, ui, bus });
   applySettings({ ...SETTINGS_DEFAULTS, ...ui.settings });
   bus.on(EVENTS.SETTINGS_CHANGED, ({ settings }) => applySettings(settings));
+  checkRotate();
 
   if (DEBUG) {
     window.__game = {

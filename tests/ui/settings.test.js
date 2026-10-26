@@ -42,17 +42,30 @@ test('sanitize: clamps numbers, rejects wrong types and unknown qualities', () =
   assert.equal(sanitizeSettings({ mouseSensitivity: NaN }).mouseSensitivity, SETTINGS_DEFAULTS.mouseSensitivity);
   assert.equal(sanitizeSettings({ volume: '0.5' }).volume, SETTINGS_DEFAULTS.volume);
   assert.equal(sanitizeSettings({ volume: 1.0000001 }).volume, 1);
+  assert.equal(sanitizeSettings({ touchSensitivity: 99 }).touchSensitivity, 3);
+  assert.equal(sanitizeSettings({ touchSensitivity: 0 }).touchSensitivity, 0.2);
+  assert.equal(sanitizeSettings({ touchSensitivity: '2' }).touchSensitivity, SETTINGS_DEFAULTS.touchSensitivity);
+});
+
+test('touch look sensitivity is its own setting, defaulting to 1', () => {
+  assert.equal(SETTINGS_DEFAULTS.touchSensitivity, 1);
+  const s = sanitizeSettings({ mouseSensitivity: 2.5 });
+  assert.equal(s.touchSensitivity, 1, 'the mouse setting does not leak into touch');
+  assert.equal(sanitizeSettings({ touchSensitivity: 1.234 }).touchSensitivity, 1.23);
 });
 
 test('sanitize: keeps valid values', () => {
-  const good = { mouseSensitivity: 1.75, invertY: true, volume: 0.35, quality: 'high' };
+  const good = { mouseSensitivity: 1.75, invertY: true, volume: 0.35, quality: 'high', touchSensitivity: 0.6 };
   assert.deepEqual(sanitizeSettings(good), good);
 });
 
 test('settings round-trip through storage', () => {
   const st = fakeStorage();
-  assert.equal(saveSettings(st, { mouseSensitivity: 2, invertY: true, volume: 0.5, quality: 'low' }), true);
-  assert.deepEqual(loadSettings(st), { mouseSensitivity: 2, invertY: true, volume: 0.5, quality: 'low' });
+  assert.equal(saveSettings(st, { mouseSensitivity: 2, invertY: true, volume: 0.5, quality: 'low', touchSensitivity: 1.5 }), true);
+  assert.deepEqual(loadSettings(st), { mouseSensitivity: 2, invertY: true, volume: 0.5, quality: 'low', touchSensitivity: 1.5 });
+  // Settings saved before touchSensitivity existed load with its default.
+  const old = fakeStorage({ [SETTINGS_KEY]: JSON.stringify({ mouseSensitivity: 2, invertY: true, volume: 0.5, quality: 'low' }) });
+  assert.equal(loadSettings(old).touchSensitivity, SETTINGS_DEFAULTS.touchSensitivity);
   assert.ok(st.data.has(SETTINGS_KEY));
 });
 

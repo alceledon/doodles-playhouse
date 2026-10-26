@@ -19,6 +19,7 @@ const BASE = {
   },
   look: {
     sensitivity: 0.0022, // radians per mouse pixel at settings.mouseSensitivity = 1
+    touch: 0.005, // radians per CSS px dragged at settings.touchSensitivity = 1 (a ~300 px swipe turns ~85°)
     pitchLimit: 1.45,
     hideYaw: 0.75, // look range while hidden: ± around the hide spot's yaw
     hidePitch: 0.4,

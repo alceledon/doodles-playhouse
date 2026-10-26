@@ -25,7 +25,8 @@ export function createAudio({ bus, camera }) {
   // Browsers only allow sound after a user gesture. main.js calls unlock() after
   // the title screen, but we also listen ourselves so the title music starts on
   // the first click, and so ?difficulty=… (no title click) still gets sound.
-  const gestureEvents = ['pointerdown', 'keydown', 'touchend'];
+  // iOS only counts the end of a touch (touchend, pointerup, click) as a gesture.
+  const gestureEvents = ['pointerdown', 'keydown', 'touchend', 'pointerup', 'click'];
   const onGesture = () => {
     engine.start();
     if (engine.ready()) for (const e of gestureEvents) removeEventListener(e, onGesture, true);

@@ -8,13 +8,17 @@ import { cue } from '../audio/cues.js';
 import { CRAYONS, crayonDot, crayonText, doodleSketch } from './crayon.js';
 import { button, el, tween, wait } from './dom.js';
 import { QUALITIES, SENSITIVITY_RANGE } from './settings.js';
-import { DIFFICULTY_INFO, HOW_TO_PLAY, ROUTE_TEXT, daysLeftText, formatTime } from './text.js';
+import { DIFFICULTY_INFO, HOW_TO_PLAY, ROUTE_TEXT, daysLeftText, formatTime, pauseHint } from './text.js';
 import { UI_TUNING } from './tuning.js';
 
 /**
- * @param {{layer: HTMLElement, settings: () => Object, changeSettings: (patch: Object) => void, bestTimes: () => Object}} deps
+ * @param {{layer: HTMLElement, settings: () => Object, changeSettings: (patch: Object) => void, bestTimes: () => Object,
+ *   inputMode?: () => 'touch'|'desktop', onPlay?: () => void}} deps
+ *   inputMode: menus show touch wording and controls in touch mode; onPlay runs inside the Play tap.
  */
-export function createScreens({ layer, settings, changeSettings, bestTimes }) {
+export function createScreens({ layer, settings, changeSettings, bestTimes, inputMode = () => 'desktop', onPlay = () => {} }) {
+  const touch = () => inputMode() === 'touch';
+
   function screen(className = '') {
     const s = el('div', `dp-screen ${className}`.trim());
     s.setAttribute('role', 'dialog');
@@ -61,7 +65,10 @@ export function createScreens({ layer, settings, changeSettings, bestTimes }) {
         const row = el('label', 'dp-setting', [el('span', '', label), input, out]);
         return { row, input };
       };
-      const sens = slider('Mouse sensitivity', 'mouseSensitivity', SENSITIVITY_RANGE, (v) => `${v.toFixed(2)}×`);
+      // Touch gets its own look speed: a finger drag isn't a mouse count.
+      const sens = touch()
+        ? slider('Look sensitivity', 'touchSensitivity', SENSITIVITY_RANGE, (v) => `${v.toFixed(2)}×`)
+        : slider('Mouse sensitivity', 'mouseSensitivity', SENSITIVITY_RANGE, (v) => `${v.toFixed(2)}×`);
       const vol = slider('Volume', 'volume', { min: 0, max: 1, step: 0.05 }, (v) => `${Math.round(v * 100)}%`);
       vol.input.addEventListener('change', () => cue('jingle', { gain: 1.2 })); // a preview at the new level
 
@@ -69,7 +76,7 @@ export function createScreens({ layer, settings, changeSettings, bestTimes }) {
       invert.type = 'checkbox';
       invert.checked = cur.invertY;
       invert.addEventListener('change', () => changeSettings({ invertY: invert.checked }));
-      const invertRow = el('label', 'dp-setting', [el('span', '', 'Invert mouse Y'), invert, el('span')]);
+      const invertRow = el('label', 'dp-setting', [el('span', '', touch() ? 'Invert look Y' : 'Invert mouse Y'), invert, el('span')]);
 
       const seg = el('div', 'dp-seg');
       const qButtons = QUALITIES.map((q) => {
@@ -92,7 +99,7 @@ export function createScreens({ layer, settings, changeSettings, bestTimes }) {
       const back = button('Back', close, 'dp-primary');
       const offEsc = onEsc(close);
       s.append(panel, back);
-      back.focus();
+      back.focus({ preventScroll: true }); // a short screen opens at its top, not scrolled to Back
     });
   }
 
@@ -103,7 +110,7 @@ export function createScreens({ layer, settings, changeSettings, bestTimes }) {
       const panel = el('div', 'dp-panel');
       for (const p of HOW_TO_PLAY.intro) panel.append(el('p', '', p));
       const keys = el('div', 'dp-keys');
-      for (const [k, what] of HOW_TO_PLAY.controls) keys.append(el('kbd', '', k), el('span', '', what));
+      for (const [k, what] of touch() ? HOW_TO_PLAY.touchControls : HOW_TO_PLAY.controls) keys.append(el('kbd', '', k), el('span', '', what));
       panel.append(keys);
       const close = async () => {
         offEsc();
@@ -113,7 +120,7 @@ export function createScreens({ layer, settings, changeSettings, bestTimes }) {
       const back = button('Back', close, 'dp-primary');
       const offEsc = onEsc(close);
       s.append(panel, back);
-      back.focus();
+      back.focus({ preventScroll: true }); // a short screen opens at its top, not scrolled to Back
     });
   }
 
@@ -186,6 +193,7 @@ export function createScreens({ layer, settings, changeSettings, bestTimes }) {
         const card = button('', async () => {
           if (chosen) return;
           chosen = true;
+          onPlay(); // before any await: full screen only works inside the tap
           dispose();
           await leave(s);
           resolve({ difficulty: d });
@@ -267,8 +275,8 @@ export function createScreens({ layer, settings, changeSettings, bestTimes }) {
         button('How to Play', () => openHowTo(), ''),
         button('Quit to title', () => done('quit'), 'dp-quiet'),
       ]);
-      s.append(col, el('p', 'dp-sub', 'Click Resume to grab the mouse again.'));
-      resume.focus();
+      s.append(col, el('p', 'dp-sub', pauseHint(inputMode())));
+      resume.focus({ preventScroll: true });
     });
   }
 
@@ -291,7 +299,7 @@ export function createScreens({ layer, settings, changeSettings, bestTimes }) {
         resolve();
       }, 'dp-primary');
       s.append(...parts, b);
-      b.focus();
+      b.focus({ preventScroll: true });
     });
   }
 

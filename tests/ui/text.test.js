@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DIFFICULTIES, ITEM_IDS, LOCK_IDS, MAX_DAYS, ROUTES } from '../../src/core/contracts.js';
-import { DIFFICULTY_INFO, EXIT_MESSAGES, ITEM_NAMES, LOCK_MESSAGES, ROUTE_TEXT, daysLeftText, formatTime, itemName } from '../../src/ui/text.js';
+import { DIFFICULTY_INFO, EXIT_MESSAGES, HOW_TO_PLAY, ITEM_NAMES, LOCK_MESSAGES, ROUTE_TEXT, daysLeftText, formatTime, itemName, pauseHint, promptFor } from '../../src/ui/text.js';
 import { GLYPHS, missingGlyphs, textWidth } from '../../src/ui/glyphs.js';
 
 test('formatTime', () => {
@@ -46,4 +46,29 @@ test('glyph strokes stay on the grid', () => {
     }
   }
   assert.ok(textWidth('DAY 5') > textWidth('DAY'));
+});
+
+test('prompts in touch mode say Tap and Use instead of Click and keys', () => {
+  const cases = [
+    ['Click: pick up Hammer', 'Tap: pick up Hammer'],
+    ['Click: turn the red dial · Right click: back', 'Tap: turn the red dial · Use: back'],
+    ['Crouch (C) to crawl into the tunnel', 'Crouch to crawl into the tunnel'],
+    ['Click: stop hiding', 'Tap: stop hiding'],
+    ['E: open door', 'Tap: open door'],
+    ['Locked: needs the Padlock Key', 'Locked: needs the Padlock Key'],
+  ];
+  for (const [desktop, touch] of cases) {
+    assert.equal(promptFor(desktop, 'touch'), touch);
+    assert.equal(promptFor(desktop, 'desktop'), desktop, 'desktop wording is untouched');
+  }
+  assert.equal(promptFor(null, 'touch'), null);
+  assert.equal(promptFor('', 'touch'), '');
+});
+
+test('How to Play has touch controls, and the pause hint follows the mode', () => {
+  assert.ok(HOW_TO_PLAY.touchControls.length >= 6);
+  for (const [k, what] of HOW_TO_PLAY.touchControls) assert.ok(k && what);
+  assert.ok(!HOW_TO_PLAY.touchControls.some(([k]) => /click|mouse|esc/i.test(k)));
+  assert.match(pauseHint('touch'), /^Tap/);
+  assert.match(pauseHint('desktop'), /^Click/);
 });

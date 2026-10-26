@@ -34,7 +34,7 @@ export const EVENTS = Object.freeze({
   DART_FIRED: 'dartFired',        // {origin, dir /* unit vector */, range} — Doodle does its own hit test
   JEEP_STARTED: 'jeepStarted',    // {pos, floorId}
   ESCAPED: 'escaped',             // {route: 'frontDoor'|'garage'}
-  PAUSE_REQUEST: 'pauseRequest',  // {} — Esc pressed or pointer lock lost
+  PAUSE_REQUEST: 'pauseRequest',  // {} — Esc pressed, pointer lock lost, page hidden, or the touch Pause button
 
   // ---- Doodle (emitted by Doodle) ----
   DOODLE_STATE: 'doodleState',    // {state: DoodleState, prev: DoodleState}
@@ -64,6 +64,9 @@ export const EVENTS = Object.freeze({
 
   // ---- settings (emitted by UI) ----
   SETTINGS_CHANGED: 'settingsChanged', // {settings: Settings}
+
+  // ---- device (emitted by main.js's input watcher, src/core/device.js) ----
+  INPUT_MODE: 'inputMode',        // {mode: 'touch'|'desktop'} — touch controls, prompt wording and menus follow it
 });
 
 const KNOWN = new Set(Object.values(EVENTS));

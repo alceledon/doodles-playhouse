@@ -4,11 +4,15 @@
 //
 // Owns the Player object (contracts.js). It never decides game rules: clicks
 // and keys are handed to the callbacks (onPrimary, onSecondary, onDrop, onKey).
+// Touch controls (touch.js) feed it through `stick`, touchLook() and the
+// toggles; in touch mode there's no pointer lock.
 
 import * as THREE from 'three';
 import { EVENTS } from '../core/events.js';
 import { ITEMS, PLAYER_BODY, SETTINGS_DEFAULTS, STOREY_HEIGHT } from '../core/contracts.js';
 import { angleDiff, clamp, copy, lerp, lerpV } from '../core/math.js';
+import { isTouchMode } from '../core/device.js';
+import { combineMove, idleStick } from './joystick.js';
 import { bodyHeight, canStand, overlappingY, pushOut, slideMove, targetSpeed, updateStamina, wishDir } from './movement.js';
 import { createPathFollower, yawOf } from './path.js';
 
@@ -37,10 +41,12 @@ export function createPlayerController({
 }) {
   const floorY = Object.fromEntries(world.floors.map((f) => [f.id, f.y]));
   let sensitivity = settings.mouseSensitivity ?? 1;
+  let touchSensitivity = settings.touchSensitivity ?? 1;
   let invertY = !!settings.invertY;
   bus.on(EVENTS.SETTINGS_CHANGED, ({ settings: s }) => {
     if (!s) return;
     sensitivity = s.mouseSensitivity ?? sensitivity;
+    touchSensitivity = s.touchSensitivity ?? touchSensitivity;
     invertY = !!s.invertY;
   });
 
@@ -103,16 +109,23 @@ export function createPlayerController({
     bus.emit(EVENTS.PAUSE_REQUEST, {});
   }
 
+  function toggleCrouch() {
+    if (enabled && !player.hidden && !riding) wantCrouch = !wantCrouch;
+  }
+  function toggleFlashlight() {
+    if (enabled) setFlashlight(!player.flashlightOn);
+  }
+
   const onKeyDown = (e) => {
     if (!enabled) return;
     keys.add(e.code);
     if (e.repeat) return;
     switch (e.code) {
       case 'KeyC':
-        if (!player.hidden && !riding) wantCrouch = !wantCrouch;
+        toggleCrouch();
         break;
       case 'KeyF':
-        setFlashlight(!player.flashlightOn);
+        toggleFlashlight();
         break;
       case 'KeyE':
         onPrimary();
@@ -147,6 +160,10 @@ export function createPlayerController({
   const onLockChange = () => {
     if (enabled && document.pointerLockElement !== canvas) requestPause();
   };
+  // Switching apps or tabs mid-play pauses (touch has no pointer lock to lose).
+  const onVisibility = () => {
+    if (enabled && document.hidden) requestPause();
+  };
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', onBlur);
@@ -154,8 +171,10 @@ export function createPlayerController({
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('contextmenu', onContextMenu);
   document.addEventListener('pointerlockchange', onLockChange);
+  document.addEventListener('visibilitychange', onVisibility);
 
   function requestPointerLock() {
+    if (isTouchMode()) return; // touch looks by dragging; a lock would only hide nothing
     try {
       const p = canvas.requestPointerLock?.();
       p?.catch?.(() => {}); // refused right after Esc; the next canvas click retries
@@ -167,7 +186,13 @@ export function createPlayerController({
 
   /** Mouse look in pixels (also used by debug.look). */
   function look(dx, dy) {
-    const k = tuning.look.sensitivity * sensitivity;
+    turn(dx, dy, tuning.look.sensitivity * sensitivity);
+  }
+  /** Touch look in CSS pixels dragged. */
+  function touchLook(dx, dy) {
+    turn(dx, dy, tuning.look.touch * touchSensitivity);
+  }
+  function turn(dx, dy, k) {
     player.yaw -= dx * k;
     player.pitch -= dy * k * (invertY ? -1 : 1);
     clampLook();
@@ -204,6 +229,9 @@ export function createPlayerController({
   }
 
   const input = (a, b) => (keys.has(a) || keys.has(b) ? 1 : 0);
+  /** The touch stick's analog move; touch.js writes it, zero when idle. */
+  const stick = idleStick();
+  const move = { fwd: 0, strafe: 0, scale: 1, sprint: false }; // reused every frame
 
   function updateWalking(dt) {
     const pos = player.pos;
@@ -211,13 +239,13 @@ export function createPlayerController({
     if (wantCrouch) player.crouched = true;
     else if (player.crouched && (noclip || canStand(pos, pos.y, boxesAround(pos.y, PLAYER_BODY.height)))) player.crouched = false;
 
-    const fwd = input('KeyW', 'ArrowUp') - input('KeyS', 'ArrowDown');
-    const strafe = input('KeyD', 'ArrowRight') - input('KeyA', 'ArrowLeft');
-    const dir = wishDir(player.yaw, fwd, strafe);
-    const carryingBattery = heldItemId() === ITEMS.CAR_BATTERY;
     const shift = keys.has('ShiftLeft') || keys.has('ShiftRight');
-    const wantsSprint = !!dir && shift && !player.crouched && !carryingBattery && !stam.exhausted && stam.stamina > 0;
-    const speed = dir ? targetSpeed({ crouched: player.crouched, sprinting: wantsSprint, carryingBattery }, tuning.move) * (noclip ? 2 : 1) : 0;
+    // Keys as before; with none pressed, the touch stick (analog, rim = sprint).
+    combineMove(input('KeyW', 'ArrowUp') - input('KeyS', 'ArrowDown'), input('KeyD', 'ArrowRight') - input('KeyA', 'ArrowLeft'), shift, stick, move);
+    const dir = wishDir(player.yaw, move.fwd, move.strafe);
+    const carryingBattery = heldItemId() === ITEMS.CAR_BATTERY;
+    const wantsSprint = !!dir && move.sprint && !player.crouched && !carryingBattery && !stam.exhausted && stam.stamina > 0;
+    const speed = dir ? targetSpeed({ crouched: player.crouched, sprinting: wantsSprint, carryingBattery }, tuning.move) * move.scale * (noclip ? 2 : 1) : 0;
 
     // Accelerate toward the wanted velocity.
     const tx = dir ? dir.x * speed : 0;
@@ -481,6 +509,7 @@ export function createPlayerController({
     canvas.removeEventListener('mousedown', onMouseDown);
     canvas.removeEventListener('contextmenu', onContextMenu);
     document.removeEventListener('pointerlockchange', onLockChange);
+    document.removeEventListener('visibilitychange', onVisibility);
     camera.remove(flashlight, flashlight.target);
     flashlight.dispose();
   }
@@ -493,6 +522,11 @@ export function createPlayerController({
     requestPointerLock,
     exitPointerLock,
     look,
+    touchLook,
+    toggleCrouch,
+    toggleFlashlight,
+    requestPause,
+    stick,
     hide,
     unhide,
     ride,

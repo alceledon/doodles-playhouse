@@ -43,6 +43,25 @@ Every rule lives in `rules.js`.
 
 Carrying the Car Battery caps your speed at 2.2 m/s and stops sprinting.
 
+### Touch (phones and tablets)
+
+`src/player/touch.js` draws on-screen controls while the input mode is `touch`
+(`src/core/device.js`, `EVENTS.INPUT_MODE`) and controls are enabled. It only feeds the
+controller (`stick`, `touchLook`, `toggleCrouch`, `toggleFlashlight`) and Gameplay's own
+actions; the math is pure in `src/player/joystick.js`.
+
+| Touch | Action |
+|---|---|
+| Left half | A stick appears where the thumb lands: analog walk, pushed to the rim = sprint. |
+| Right half | Drag to look (`settings.touchSensitivity`, `invertY`; `tuning.look.touch` rad/px). |
+| Quick tap | Interact with what's under the finger, if it's in reach and not behind a wall (`tapAt`, the same raycast as the look target). A quick tap on the left half that never moved the stick counts too. While hidden, a tap gets you out. |
+| Hand button | Interact with what's in the middle (lit while there's a prompt). |
+| Use / Drop / Crouch / Light | Right click, G, C and F. Use reads Throw, Treat or Fire for the held item. |
+| Pause (top right) | `PAUSE_REQUEST`. Hiding the page (app switch) also pauses, on desktop too. |
+
+There's no pointer lock in touch mode: `requestPointerLock()` is a no-op. `debug.tap(x, y)`
+taps at client coordinates and `debug.touch` is the controls object.
+
 ## Items
 
 - **One hand.** If you pick something up while holding another item, the old one goes down

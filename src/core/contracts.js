@@ -125,6 +125,7 @@ export const SETTINGS_DEFAULTS = Object.freeze({
   invertY: false,
   volume: 0.8, // 0 .. 1
   quality: 'medium', // 'low' | 'medium' | 'high' — main.js maps it to render resolution
+  touchSensitivity: 1, // touch look multiplier, 0.2 .. 3 (invertY applies to touch too)
 });
 
 // ---------------------------------------------------------------------------
@@ -248,7 +249,7 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  * @property {(day: number) => void} startDay   put the player in startBed, re-arm traps; items/locks persist across days
  * @property {() => void} onCaught              drop the held item where the player is
  * @property {(enabled: boolean) => void} setControlsEnabled   false during cutscenes/menus (camera is then free for cutscenes)
- * @property {() => void} requestPointerLock    call from a user gesture
+ * @property {() => void} requestPointerLock    call from a user gesture; a no-op in touch mode (device.js)
  * @property {() => void} exitPointerLock
  * @property {() => void} [dispose]
  * @property {{giveItem: (id: string) => void, setNoclip: (on: boolean) => void, teleport: (pos: Vec3, floorId: FloorId) => void, openAllLocks: () => void, keypadCode: () => string}} [debug]
@@ -259,8 +260,10 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  *     (cutscenes own the camera then) and must ignore input.
  *   - Gameplay owns pointer lock: it locks on a canvas click while controls are enabled, and emits
  *     PAUSE_REQUEST when the lock is lost (Esc) while controls are enabled.
+ *   - In touch mode (EVENTS.INPUT_MODE) it shows on-screen controls instead of locking the pointer, and
+ *     emits PAUSE_REQUEST when the page is hidden (app switch) while controls are enabled.
  *   - It positions the camera at player.eyePos() with yaw/pitch each frame while controls are on.
- *   - Listen to SETTINGS_CHANGED for mouseSensitivity / invertY.
+ *   - Listen to SETTINGS_CHANGED for mouseSensitivity / touchSensitivity / invertY.
  *
  * @typedef {Object} DoodleModel
  * @property {Object} object3d                     THREE.Object3D root (feet at y=0, facing -Z)

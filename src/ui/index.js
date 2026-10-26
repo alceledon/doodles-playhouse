@@ -1,8 +1,11 @@
 // UI entry point: createUI({ root, bus }) → UI and createCutscenes(opts) →
 // Cutscenes (see contracts.js). All DOM stays inside `root`; styles come from
-// ui.css next to this file, injected once.
+// ui.css next to this file, injected once. In touch mode (EVENTS.INPUT_MODE)
+// the layer gets .dp-touch, prompts and menus switch to touch wording, and
+// picking a difficulty asks for full screen.
 
 import { EVENTS } from '../core/events.js';
+import { INPUT_MODES, getInputMode, tryFullscreen } from '../core/device.js';
 import { createHud } from './hud.js';
 import { createScreens } from './screens.js';
 import { getStorage, loadBestTimes, loadSettings, recordBestTime, sanitizeSettings, saveSettings } from './settings.js';
@@ -46,8 +49,24 @@ export function createUI({ root, bus }) {
     bus.emit(EVENTS.SETTINGS_CHANGED, { settings: { ...settings } });
   }
 
-  const hud = createHud(layer, bus);
-  const screens = createScreens({ layer, settings: () => settings, changeSettings, bestTimes: () => loadBestTimes(storage) });
+  let inputMode = getInputMode();
+  const setMode = (mode) => {
+    inputMode = mode;
+    layer.classList.toggle('dp-touch', mode === INPUT_MODES.TOUCH);
+  };
+  setMode(inputMode);
+  bus.on(EVENTS.INPUT_MODE, ({ mode } = {}) => setMode(mode));
+
+  const hud = createHud(layer, bus, { inputMode: () => inputMode });
+  const screens = createScreens({
+    layer,
+    settings: () => settings,
+    changeSettings,
+    bestTimes: () => loadBestTimes(storage),
+    inputMode: () => inputMode,
+    // Runs inside the Play tap, the gesture full screen needs. Desktop stays windowed.
+    onPlay: () => inputMode === INPUT_MODES.TOUCH && tryFullscreen(),
+  });
 
   return {
     settings,

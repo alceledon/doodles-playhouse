@@ -1,16 +1,17 @@
 // The Granny-minimal HUD: a center dot that becomes a hand over usable things,
 // the prompt line, the held item, a stamina bar that only shows while not full,
-// lock toasts, and a vignette that closes in when Doodle is near.
+// lock toasts, and a vignette that closes in when Doodle is near. Prompts are
+// reworded for touch ("Tap: ...") while the input mode is touch.
 
 import { EVENTS } from '../core/events.js';
 import { approach } from '../audio/curves.js';
 import { el } from './dom.js';
 import { drawHand, drawItemIcon } from './icons.js';
 import { staminaView, vignetteLevel } from './motion.js';
-import { EXIT_MESSAGES, LOCK_MESSAGES, itemName } from './text.js';
+import { EXIT_MESSAGES, LOCK_MESSAGES, itemName, promptFor } from './text.js';
 import { UI_TUNING } from './tuning.js';
 
-export function createHud(layer, bus) {
+export function createHud(layer, bus, { inputMode = () => 'desktop' } = {}) {
   const hud = el('div', 'dp-hud');
   const vignette = el('div', 'dp-vignette');
   const dot = el('div', 'dp-dot');
@@ -32,9 +33,11 @@ export function createHud(layer, bus) {
   let toastTimer = 0;
   let lastStamina = null;
 
+  let rawPrompt = null; // as Gameplay sent it; reworded when the input mode flips
   function setPrompt(text) {
+    rawPrompt = text;
     hud.classList.toggle('dp-has-prompt', !!text);
-    if (text) prompt.textContent = text;
+    if (text) prompt.textContent = promptFor(text, inputMode());
   }
 
   function setHeld(itemId, n) {
@@ -67,6 +70,7 @@ export function createHud(layer, bus) {
   bus.on(EVENTS.LOCK_OPENED, ({ lockId } = {}) => showToast(LOCK_MESSAGES[lockId]));
   bus.on(EVENTS.EXIT_UNLOCKED, ({ route } = {}) => showToast(EXIT_MESSAGES[route]));
   bus.on(EVENTS.RUN_START, reset);
+  bus.on(EVENTS.INPUT_MODE, () => setPrompt(rawPrompt));
 
   return {
     element: hud,
