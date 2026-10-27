@@ -30,11 +30,16 @@ export function createModelKit() {
     if (!geometries.has(key)) geometries.set(key, make());
     return geometries.get(key);
   };
-  /** Lambert material, cached by color + texture + emissive. */
-  const mat = (color, { map = null, emissive = 0, emissiveIntensity = 1, transparent = false, opacity = 1, key = '' } = {}) => {
-    const k = `${color}|${map?.uuid ?? ''}|${emissive}|${emissiveIntensity}|${opacity}|${key}`;
+  /**
+   * Lambert material, cached by color + texture + emissive. Small or dark items get a faint
+   * emissive glow so they can be found in the dark; `glowMap` makes a texture glow in its own colours.
+   */
+  const mat = (color, { map = null, emissive = 0, emissiveIntensity = 1, glowMap = false, transparent = false, opacity = 1, key = '' } = {}) => {
+    const k = `${color}|${map?.uuid ?? ''}|${emissive}|${emissiveIntensity}|${glowMap}|${opacity}|${key}`;
     if (!materials.has(k)) {
-      materials.set(k, new THREE.MeshLambertMaterial({ color, map, emissive, emissiveIntensity, transparent, opacity }));
+      const m = new THREE.MeshLambertMaterial({ color, map, emissive, emissiveIntensity, transparent, opacity });
+      if (glowMap && map) m.emissiveMap = map;
+      materials.set(k, m);
     }
     return materials.get(k);
   };
@@ -75,16 +80,17 @@ export function createModelKit() {
         part(box(0.036, 0.04, 0.11), metal(), 0.13, 0.02, 0),
         part(box(0.03, 0.03, 0.04), metal(), 0.13, 0.02, -0.07, 0, 0, 0),
       ),
+    // A toy-car key: a chunky teal fob, so it doesn't vanish on a dark floor.
     [ITEMS.JEEP_KEY]: () =>
       group(
-        part(box(0.036, 0.014, 0.03), mat(0x222326), -0.02, 0.008, 0),
-        part(box(0.05, 0.008, 0.014), metal(), 0.022, 0.006, 0),
-        part(torus(0.016, 0.004), mat(0xe03c31, { emissive: 0x300000 }), -0.05, 0.005, 0, Math.PI / 2),
+        part(box(0.046, 0.018, 0.036), mat(0x2fc4d8, { emissive: 0x0a3a44 }), -0.022, 0.009, 0),
+        part(box(0.05, 0.008, 0.014), mat(0xffffff, { map: metalTexture(), emissive: 0x202020 }), 0.026, 0.006, 0),
+        part(torus(0.016, 0.004), mat(0xe03c31, { emissive: 0x300000 }), -0.056, 0.005, 0, Math.PI / 2),
       ),
     [ITEMS.CAR_BATTERY]: () =>
       group(
-        part(box(0.26, 0.18, 0.17), mat(0xffffff, { map: batteryTexture() }), 0, 0.09, 0),
-        part(cyl(0.017, 0.017, 0.025, 6), mat(0xe03c31), -0.08, 0.19, 0),
+        part(box(0.26, 0.18, 0.17), mat(0xffffff, { map: batteryTexture(), emissive: 0x5a5a5a, glowMap: true }), 0, 0.09, 0),
+        part(cyl(0.017, 0.017, 0.025, 6), mat(0xe03c31, { emissive: 0x300000 }), -0.08, 0.19, 0),
         part(cyl(0.017, 0.017, 0.025, 6), mat(0x2b2b2b), 0.08, 0.19, 0),
         part(torus(0.05, 0.008, Math.PI), mat(0x2b2b2b), 0, 0.18, 0),
       ),

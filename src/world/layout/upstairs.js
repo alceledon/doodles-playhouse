@@ -61,7 +61,7 @@ export const UPSTAIRS = {
     P('rug', 4, 4, 0, { w: 2.6, round: true, color: 0xf0a0c8 }, { rugStyle: 'round' }),
     P('blockTower', 5.0, 6.4, 0, { n: 7, seed: 11 }),
     // landing
-    P('bookshelf', 12.0, 0.295, S, { w: 1.2, h: 1.2, color: 0xc0a0f0, seed: 8 }),
+    P('bookshelf', 12.0, 0.295, S, { w: 1.2, h: 1.2, color: 0xc0a0f0, seed: 8, gap: { shelf: 1, x0: 0.06, x1: 0.34 } }), // gap: sJeepKeyLanding
     P('toyBox', 13.3, 0.38, S, { color: 0xf07ab8, lid: 0x3a7be0 }),
     P('rug', 12, 5.0, 0, { w: 1.5, d: 7.0 }, { rugStyle: 'runner' }),
     P('beanbag', 10.4, 8.0, 0, { color: 0x8a52d0 }),
@@ -159,7 +159,7 @@ export const UPSTAIRS = {
     { item: 'jeepKey', id: 'sJeepKeyLanding', x: 11.8, y: 0.44, z: 0.3 },
     { item: 'hammer', id: 'sHammerCraft', x: 19.25, y: 0.55, z: 3.05 },
     { item: 'fuse', id: 'sFuseBathroom', x: 19.15, y: 0.92, z: 12.55 },
-    { item: 'toyChestKey', id: 'sChestKeyNursery', x: 6.2, y: 0.5, z: 2.2 },
+    { item: 'toyChestKey', id: 'sChestKeyNursery', x: 6.06, y: 0.52, z: 2.2, rotY: Math.PI / 2 }, // rocking-chair seat, in front of the teddy
     { item: 'tennisBall', id: 'sBallSlide', x: 12.6, y: 0, z: 14.4 },
     { item: 'treats', id: 'sTreatsLanding', x: 10.1, y: 0, z: 6.9 },
     { item: 'dart', id: 'sDartBedroom', x: 3.9, y: 0, z: 12.1 },

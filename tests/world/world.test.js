@@ -5,11 +5,12 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { validateWorld, SPAWNED_ITEMS, HIDE_KINDS, FLOOR_Y, PLAYER_BODY, DIFFICULTIES } from '../../src/core/contracts.js';
 import {
-  checkReachability, reachableSet, nearestPassable, neighbors, flagsAt, parseKey, refKey, worldToCell, isPassable, NAV, AGENTS,
+  checkReachability, reachableSet, nearestPassable, neighbors, flagsAt, parseKey, refKey, worldToCell, isPassable, cellCenter, NAV, AGENTS,
 } from '../../src/core/navgrid.js';
 import { createBus, EVENTS } from '../../src/core/events.js';
 import { circleHitsBox2D } from '../../src/core/math.js';
 import { buildWorldData, cutWall, subtractRects } from '../../src/world/build.js';
+import { aabb } from '../../src/world/props.js';
 import { tuningFor } from '../../src/world/tuning.js';
 
 const make = (opts) => buildWorldData(opts);
@@ -176,6 +177,59 @@ test('spawns: at least 3 candidates per item, on at least 2 floors, several insi
       if (s.containerId || s.pos.y > FLOOR_Y[s.floorId] + 1e-9) continue;
       assert.ok(!bodyHits(w.staticBoxes[s.floorId], s.pos.x, s.pos.z, FLOOR_Y[s.floorId], 0.12, 0.3), `spawn ${s.id} is inside furniture`);
     }
+});
+
+/** Does the segment a→b pass through box b? (slab test; touching a face doesn't count) */
+function segmentHitsBox(a, b, box) {
+  let t0 = 0;
+  let t1 = 1;
+  for (const [o, d, lo, hi] of [[a.x, b.x - a.x, box.minX, box.maxX], [a.y, b.y - a.y, box.minY, box.maxY], [a.z, b.z - a.z, box.minZ, box.maxZ]]) {
+    if (Math.abs(d) < 1e-12) {
+      if (o <= lo || o >= hi) return false;
+      continue;
+    }
+    const u0 = Math.min((lo - o) / d, (hi - o) / d);
+    const u1 = Math.max((lo - o) / d, (hi - o) / d);
+    t0 = Math.max(t0, u0);
+    t1 = Math.min(t1, u1);
+    if (t0 >= t1) return false;
+  }
+  return true;
+}
+
+test('spawns: every item spot is clear of furniture and can be seen from where the player stands', () => {
+  // Line of sight from standing and crouched eyes on walkable cells within 3.5 m, against every
+  // visual part (as its bounding box) and wall. Containers count as open: their moving parts are
+  // ignored. A Jeep Key once spawned among the books on a shelf, and another at the bottom of a
+  // deep trunk, where nobody found them.
+  const w = make();
+  const MIN_VIEWS = 10;
+  const inside = (p, b) => p.x > b.minX && p.x < b.maxX && p.y > b.minY && p.y < b.maxY && p.z > b.minZ && p.z < b.maxZ;
+  for (const f of w.floors) {
+    const occluders = [
+      ...w.geo.parts[f.id].filter((pt) => pt.m !== 'slats').map((pt) => aabb([pt])),
+      ...w.geo.wallBoxes.filter((wb) => wb.floorId === f.id).map((wb) => wb.box),
+    ];
+    const grid = w.nav.floors[f.id];
+    const eyes = [];
+    for (let j = 0; j < grid.h; j++)
+      for (let i = 0; i < grid.w; i++) {
+        const ref = { floorId: f.id, i, j };
+        if (!isPassable(w.nav, ref, P)) continue;
+        const c = cellCenter(w.nav, ref);
+        for (const h of [PLAYER_BODY.eyeHeight, PLAYER_BODY.crouchEyeHeight]) eyes.push({ x: c.x, y: f.y + h, z: c.z });
+      }
+    for (const item of SPAWNED_ITEMS)
+      for (const s of w.anchors.spawns[item]) {
+        if (s.floorId !== f.id) continue;
+        const target = { x: s.pos.x, y: s.pos.y + 0.04, z: s.pos.z }; // just above where it rests
+        const buried = occluders.filter((b) => inside(target, b));
+        assert.deepEqual(buried, [], `${item} spot ${s.id} is inside furniture`);
+        const near = eyes.filter((e) => Math.hypot(e.x - target.x, e.z - target.z) <= 3.5);
+        const views = near.filter((e) => !occluders.some((b) => segmentHitsBox(e, target, b))).length;
+        assert.ok(views >= MIN_VIEWS, `${item} spot ${s.id} is visible from only ${views} of ${near.length} nearby views`);
+      }
+  }
 });
 
 test('hide spots: at least 8, covering all six kinds, with a free exit', () => {

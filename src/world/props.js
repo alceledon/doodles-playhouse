@@ -182,7 +182,8 @@ export function couch({ w = 2.0, color = 0x7a4a8c } = {}) {
   return { parts, colliders: [K(-w / 2, w / 2, 0, 0.92, -d / 2, d / 2)] };
 }
 
-export function bookshelf({ w = 1.0, h = 1.5, d = 0.35, color = C.wood, seed = 1 } = {}) {
+/** gap: { shelf, x0, x1 } keeps a stretch of one shelf free of books (local x), so an item spawned there shows. */
+export function bookshelf({ w = 1.0, h = 1.5, d = 0.35, color = C.wood, seed = 1, gap = null } = {}) {
   const parts = [
     B(-w / 2 + 0.02, h / 2, 0, 0.04, h, d, 'wood', color), B(w / 2 - 0.02, h / 2, 0, 0.04, h, d, 'wood', color),
     B(0, h / 2, d / 2 - 0.01, w, h, 0.02, 'wood', color),
@@ -199,7 +200,8 @@ export function bookshelf({ w = 1.0, h = 1.5, d = 0.35, color = C.wood, seed = 1
       k = (k * 1103515245 + 12345) & 0x7fffffff;
       const bw = 0.04 + (k % 5) * 0.012;
       const bh = 0.18 + ((k >> 4) % 6) * 0.025;
-      if ((k >> 8) % 7 !== 0) parts.push(B(x + bw / 2, y + 0.015 + bh / 2, 0.02, bw, bh, d * 0.75, 'plastic', RAINBOW[(k >> 3) % 6]));
+      const inGap = gap && gap.shelf === i && x < gap.x1 && x + bw > gap.x0;
+      if ((k >> 8) % 7 !== 0 && !inGap) parts.push(B(x + bw / 2, y + 0.015 + bh / 2, 0.02, bw, bh, d * 0.75, 'plastic', RAINBOW[(k >> 3) % 6]));
       x += bw + 0.008;
     }
   }
@@ -336,13 +338,16 @@ export function chestContainer({ w = 0.9, h = 0.55, d = 0.55, color = C.red, lid
     B(0, 0.03, 0, w, 0.06, d, m, color),
   ];
   if (old) parts.push(B(-w / 2 + 0.12, h / 2, -d / 2 - 0.005, 0.05, h, 0.01, 'metal', band), B(w / 2 - 0.12, h / 2, -d / 2 - 0.005, 0.05, h, 0.01, 'metal', band));
+  // A folded blanket fills most of it, so whatever is inside sits where you can see it with the lid up.
+  const fill = h * 0.62;
+  parts.push(B(0, 0.06 + fill / 2, 0, w - 2 * t, fill, d - 2 * t, 'fabric', old ? 0x9a7aa8 : C.white));
   // lid: pivot on the back top edge, lid extends toward -Z; +angle about X lifts the front
   const lidParts = [B(0, 0.04, -d / 2, w + 0.02, 0.08, d + 0.02, m, lid), B(0, 0.02, -d - 0.005, 0.12, 0.08, 0.02, 'metal', band)];
   return {
     parts,
     colliders: [K(-w / 2, w / 2, 0, h + 0.08, -d / 2, d / 2)],
     moving: [{ pivot: [0, h, d / 2], parts: lidParts, motion: { type: 'hinge', axis: 'x', angle: 1.9 } }],
-    points: { use: [0, h, -d / 2 - 0.02], item: [0, 0.07, 0] },
+    points: { use: [0, h, -d / 2 - 0.02], item: [0, 0.06 + fill + 0.01, 0] },
   };
 }
 
