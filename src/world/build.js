@@ -326,13 +326,17 @@ export function buildWorldData({ difficulty = 'normal', bus = null, onDoorChange
       locked: !!spec.locked,
       collider,
       cells: cellsInBox(nav, spec.floorId, spec.cellBox),
-      setOpen(open, by = 'player') {
+      // silent: a co-op guest mirroring the host's door. It still moves and collides, but the
+      // host already emitted the events, so emitting them again would double every sound.
+      setOpen(open, by = 'player', { silent = false } = {}) {
         if (open === door.isOpen) return true;
         if (door.locked && open) return false;
         door.isOpen = open;
         collidersDirty[door.floorId] = true;
-        emit(open ? EVENTS.DOOR_OPENED : EVENTS.DOOR_CLOSED, { doorId: door.id, by });
-        emit(EVENTS.NOISE, { pos: { ...door.pos }, floorId: door.floorId, loudness, kind: 'door' });
+        if (!silent) {
+          emit(open ? EVENTS.DOOR_OPENED : EVENTS.DOOR_CLOSED, { doorId: door.id, by });
+          emit(EVENTS.NOISE, { pos: { ...door.pos }, floorId: door.floorId, loudness, kind: 'door' });
+        }
         onDoorChange?.(door);
         return true;
       },
@@ -355,12 +359,14 @@ export function buildWorldData({ difficulty = 'normal', bus = null, onDoorChange
       isOpen: false,
       locked: !!spec.locked,
       itemSpot: { id: `${spec.id}.item`, floorId: spec.floorId, pos: spec.item, containerId: spec.id, roomId: spec.roomId },
-      setOpen(open) {
+      setOpen(open, by = 'player', { silent = false } = {}) {
         if (open === c.isOpen) return true;
         if (c.locked && open) return false;
         c.isOpen = open;
-        emit(open ? EVENTS.CONTAINER_OPENED : EVENTS.CONTAINER_CLOSED, { containerId: c.id });
-        emit(EVENTS.NOISE, { pos: { ...c.pos }, floorId: c.floorId, loudness: 2.5, kind: 'container' });
+        if (!silent) {
+          emit(open ? EVENTS.CONTAINER_OPENED : EVENTS.CONTAINER_CLOSED, { containerId: c.id, by });
+          emit(EVENTS.NOISE, { pos: { ...c.pos }, floorId: c.floorId, loudness: 2.5, kind: 'container' });
+        }
         onContainerChange?.(c);
         return true;
       },
@@ -398,6 +404,7 @@ export function buildWorldData({ difficulty = 'normal', bus = null, onDoorChange
 
   const anchors = {
     startBed: spotOf('startBed', ANCHORS.startBed),
+    startBed2: spotOf('startBed2', ANCHORS.startBed2),
     kennel: spotOf('kennel', ANCHORS.kennel),
     kennelBed: spotOf('kennelBed', ANCHORS.kennelBed),
     patrol: FLOORS.flatMap((f) => f.patrol.map((p) => spotOf(p.id, { ...p, floorId: f.id }))),

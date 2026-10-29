@@ -139,10 +139,10 @@ test('containers: open/close emits, the attic chest starts locked, items rest in
   for (const k of ['drawer', 'chest', 'cabinet', 'wardrobe']) assert.ok(kinds.has(k), k);
   const drawer = w.containers.find((c) => c.kind === 'drawer');
   assert.equal(drawer.setOpen(true), true);
-  assert.deepEqual(seen[0], [EVENTS.CONTAINER_OPENED, { containerId: drawer.id }]);
+  assert.deepEqual(seen[0], [EVENTS.CONTAINER_OPENED, { containerId: drawer.id, by: 'player' }]);
   assert.equal(seen[1][1].kind, 'container');
   drawer.setOpen(false);
-  assert.deepEqual(seen[2], [EVENTS.CONTAINER_CLOSED, { containerId: drawer.id }]);
+  assert.deepEqual(seen[2], [EVENTS.CONTAINER_CLOSED, { containerId: drawer.id, by: 'player' }]);
   for (const c of w.containers) {
     const s = c.itemSpot;
     assert.equal(s.containerId, c.id);
