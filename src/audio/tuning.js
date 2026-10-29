@@ -58,6 +58,10 @@ export const AUDIO_TUNING = Object.freeze({
 
   footsteps: Object.freeze({ gain: 0.32, sprintGain: 0.6, crouchGain: 0.04 }),
 
+  // Co-op: sounds the partner makes. range = how far away you hear them (their footsteps and
+  // in-hand sounds; their world noises use the NOISE's own loudness).
+  partner: Object.freeze({ range: 16, footstepRange: 14, chestHeight: 1 }),
+
   // Per-voice level trims, set by rendering each voice offline and comparing
   // its loudest 50 ms (the dev page's "measure all voices" button). Targets,
   // before distance: stingers/impacts ≈ -6..-9 dB, world noises ≈ -15..-20,
@@ -85,6 +89,7 @@ export const AUDIO_TUNING = Object.freeze({
     rustle: 2,
     crinkle: 4,
     gasp: 2.5,
+    keypadClick: 1.6,
   }),
 
   // Pause muffles the whole mix.

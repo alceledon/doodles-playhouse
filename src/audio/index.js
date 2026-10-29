@@ -2,6 +2,10 @@
 // Wires bus events to voices (soundmap.js), runs Doodle's continuous sounds
 // (doodle.js) and the score (music.js), and keeps the HRTF listener on the
 // camera. Everything is synthesized (synth.js); there are no audio files.
+//
+// Co-op: the partner's events (soundmap.js#isPartnerPayload) play where the
+// partner is, never in your head. The heartbeat and Doodle's sounds are heard
+// from the one listener, the camera, so they're always about what you hear.
 
 import { EVENTS } from '../core/events.js';
 import { setCueTarget, setDuckTarget } from './cues.js';
@@ -9,7 +13,7 @@ import { createDoodleVoice } from './doodle.js';
 import { createEngine } from './engine.js';
 import { createMusic } from './music.js';
 import { noiseRange } from './curves.js';
-import { CONTAINER_SOUNDS, EVENT_SOUNDS, footstepParams, soundForNoise, soundsForEvent } from './soundmap.js';
+import { CONTAINER_SOUNDS, EVENT_SOUNDS, cuesFor, footstepParams, isPartnerPayload, listenerFloor, partnerPlace, soundForNoise } from './soundmap.js';
 import { VOICES } from './synth.js';
 import { AUDIO_TUNING as T } from './tuning.js';
 
@@ -20,6 +24,8 @@ export function createAudio({ bus, camera }) {
   const dog = createDoodleVoice(engine);
   let world = null;
   let doodle = null;
+  let remote = null; // co-op: the partner Player (update's ctx.remote)
+  let localId = 'host'; // the local player's id; a solo run is 'host'
   let containerKind = null; // kind of the container that just opened/closed, for the NOISE that follows
 
   // Browsers only allow sound after a user gesture. main.js calls unlock() after
@@ -45,7 +51,11 @@ export function createAudio({ bus, camera }) {
     if (id && pos) engine.play(id, { pos, floorId, range: noiseRange(loudness) });
   });
 
-  on(EVENTS.FOOTSTEP, (p) => engine.play('footstep', footstepParams(p)));
+  on(EVENTS.FOOTSTEP, (p) => {
+    if (!isPartnerPayload(p, localId)) return engine.play('footstep', footstepParams(p));
+    const at = partnerPlace(p, remote);
+    if (at) engine.play('footstep', { ...footstepParams(p), ...at, range: T.partner.footstepRange });
+  });
 
   const rememberContainer = ({ containerId }) => {
     containerKind = world?.containers?.find((c) => c.id === containerId)?.kind ?? null;
@@ -54,8 +64,14 @@ export function createAudio({ bus, camera }) {
   on(EVENTS.CONTAINER_CLOSED, rememberContainer);
 
   // Table-driven one-shots (soundmap.js EVENT_SOUNDS).
-  function playCue(c, payload) {
+  function playCue(c, payload, partner) {
     const opts = { gain: c.gain ?? 1, delay: c.delay ?? 0 };
+    for (const k of c.pass ?? []) if (payload?.[k] !== undefined) opts[k] = payload[k];
+    if (c.at === 'partner') {
+      const at = partnerPlace(payload, remote);
+      if (at) engine.play(c.sound, { ...opts, ...at, range: T.partner.range });
+      return; // nowhere to put it: stay quiet rather than play in your head
+    }
     if (c.at === 'doodle') {
       if (dog.play(c.sound, opts)) return;
       if (doodle) return; // known but inaudible this frame: stay quiet rather than play in your head
@@ -65,9 +81,14 @@ export function createAudio({ bus, camera }) {
       const door = world?.doors?.find((d) => d.id === payload?.doorId);
       if (door) return engine.play(c.sound, { ...opts, pos: { ...door.pos, y: door.pos.y + 1 }, floorId: door.floorId });
     }
+    if (partner && c.at !== null) return; // the partner's sound, unplaced: never in your head
     engine.play(c.sound, opts);
   }
-  for (const type of Object.keys(EVENT_SOUNDS)) on(type, (payload) => soundsForEvent(type, payload).forEach((c) => playCue(c, payload)));
+  for (const type of Object.keys(EVENT_SOUNDS))
+    on(type, (payload) => {
+      const partner = isPartnerPayload(payload, localId);
+      for (const c of cuesFor(type, payload, localId)) playCue(c, payload, partner);
+    });
 
   // Run flow and the score.
   on(EVENTS.RUN_START, () => {
@@ -84,7 +105,8 @@ export function createAudio({ bus, camera }) {
   on(EVENTS.RESUMED, () => engine.setPaused(false));
   on(EVENTS.GAME_OVER, () => music.mute(7));
   on(EVENTS.WON, () => music.mute(4));
-  on(EVENTS.CAUGHT, () => music.mute(3.5));
+  // A knocked-out partner's catch doesn't stop your run, so the lullaby goes on.
+  on(EVENTS.CAUGHT, (p) => !isPartnerPayload(p, localId) && music.mute(3.5));
 
   setCueTarget((name, opts) => engine.play(name, opts));
   setDuckTarget((level, seconds) => engine.setDuck(level, seconds));
@@ -99,9 +121,11 @@ export function createAudio({ bus, camera }) {
     update(dt, ctx = {}) {
       world = ctx.world ?? null;
       doodle = ctx.doodle ?? null;
-      if (!engine.ready()) return;
+      remote = ctx.remote ?? null;
       const player = ctx.player ?? null;
-      engine.setListener(ctx.camera ?? camera, player?.floorId);
+      if (player?.id) localId = player.id;
+      if (!engine.ready()) return;
+      engine.setListener(ctx.camera ?? camera, listenerFloor(player, remote));
       const heard = dog.update(dt, doodle);
       music.update(dt, {
         inGame: !!player,
