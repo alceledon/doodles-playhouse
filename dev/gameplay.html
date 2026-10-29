@@ -6,6 +6,13 @@
 
   Serve the repo root (node tools/serve.mjs 8083) and open /dev/gameplay.html.
   Add ?seed=N for a fixed layout, ?difficulty=hard for more traps.
+
+  Co-op in one tab (no network):
+    ?coop=host   you host; a scripted partner (the guest) walks a loop with its flashlight on,
+                 and the panel can make it grab the nearest item (an intent run on your rules).
+    ?coop=guest  you're the guest: your clicks become intents for a host rules instance in this
+                 page (its own world, not drawn), and you mirror its snapshot every frame. A
+                 scripted host walks the loop.
 -->
 <html lang="en">
 <head>
@@ -48,6 +55,8 @@
     <button id="bDay">Next day</button>
     <button id="bNoclip">Noclip: off</button>
     <button id="bRestart">Restart</button>
+    <button id="bBotGrab" hidden>Partner: grab nearest item</button>
+    <button id="bBotDown" hidden>Partner: knock out</button>
   </div>
   <pre id="info"></pre>
   <script type="module">
@@ -59,10 +68,12 @@
     import { createDoodle } from '../src/core/stubs/doodle.js';
     import { createGameplay } from '../src/gameplay/index.js';
     import { itemName } from '../src/gameplay/items.js';
+    import { createRules } from '../src/gameplay/rules.js';
 
     const params = new URLSearchParams(location.search);
     const seed = params.has('seed') ? Number(params.get('seed')) : 1;
     const difficulty = DIFFICULTIES.includes(params.get('difficulty')) ? params.get('difficulty') : 'normal';
+    const coopRole = ['host', 'guest'].includes(params.get('coop')) ? params.get('coop') : null;
     const $ = (id) => document.getElementById(id);
 
     const bus = createBus();
@@ -82,7 +93,61 @@
     scene.add(camera);
 
     const world = createWorld({ scene, bus, rng: rng.fork('world'), difficulty });
-    const gameplay = createGameplay({ scene, camera, canvas: renderer.domElement, world, bus, rng: rng.fork('gameplay'), difficulty });
+    const coop = coopRole ? { role: coopRole, rule: 'knockout' } : undefined;
+    const gameplay = createGameplay({ scene, camera, canvas: renderer.domElement, world, bus, rng: rng.fork('gameplay'), difficulty, coop });
+
+    // ---- co-op loopback: the partner is a script, and a guest's host lives in this page ----
+    let hostRules = null;
+    if (coopRole === 'guest') {
+      const hostBus = createBus();
+      const hostWorld = createWorld({ scene: new THREE.Scene(), bus: hostBus, rng: createRng(seed).fork('world'), difficulty });
+      hostRules = createRules({ world: hostWorld, bus: hostBus, rng: createRng(seed).fork('gameplay'), difficulty, coop: { role: 'host', rule: 'knockout' } });
+      hostRules.setBodies(() => [gameplay.player]);
+      gameplay.setIntentSink((intent) => {
+        console.log('intent', intent);
+        // A little lag, like the network.
+        setTimeout(() => hostRules.applyIntent('guest', intent, gameplay.player), 120);
+      });
+    }
+    const partnerId = coopRole === 'host' ? 'guest' : 'host';
+    // In front of the bed you wake in, so you see it at once (it ignores walls and holes).
+    const loop = [
+      { x: 6.0, z: 5.4 }, { x: 3.6, z: 5.4 }, { x: 3.6, z: 6.6 }, { x: 6.0, z: 6.6 },
+    ];
+    let botT = 0;
+    let botDown = false;
+    let intentN = 0;
+    function botPose(dt) {
+      botT += dt * 0.25;
+      const k = Math.floor(botT) % loop.length;
+      const a = loop[k];
+      const b = loop[(k + 1) % loop.length];
+      const f = botT % 1;
+      const pos = { x: a.x + (b.x - a.x) * f, y: 3, z: a.z + (b.z - a.z) * f };
+      return {
+        id: partnerId, pos, floorId: 'upstairs', yaw: Math.atan2(-(b.x - a.x), -(b.z - a.z)), pitch: -0.15,
+        crouched: k === 2, sprinting: false, moving: true, hidden: false, hideSpotId: null,
+        flashlightOn: true, held: null, onLink: false, down: botDown,
+      };
+    }
+    if (coopRole) {
+      $('bBotDown').hidden = false;
+      $('bBotDown').onclick = () => {
+        botDown = !botDown;
+        if (coopRole === 'host') gameplay.setDown('guest', botDown);
+        $('bBotDown').textContent = botDown ? 'Partner: wake up' : 'Partner: knock out';
+      };
+    }
+    if (coopRole === 'host') {
+      $('bBotGrab').hidden = false;
+      $('bBotGrab').onclick = () => {
+        const p = gameplay.remote;
+        if (!p) return;
+        const d = (i) => Math.hypot(i.pos.x - p.pos.x, i.pos.z - p.pos.z) + Math.abs(i.pos.y - p.pos.y) * 3;
+        const near = gameplay.debug.rules.items.list().filter((i) => i.where === 'world' && gameplay.debug.rules.canPickUp(i)).sort((a, b) => d(a) - d(b))[0];
+        if (near) gameplay.applyIntent('guest', { n: ++intentN, kind: 'primary', target: { kind: 'item', id: near.id }, body: { pos: { ...near.pos }, floorId: near.floorId } });
+      };
+    }
     let day = 1;
     let doodle = null;
     gameplay.startDay(day);
@@ -178,8 +243,13 @@
     renderer.setAnimationLoop((now) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
+      if (coopRole) gameplay.setRemotePose(botPose(dt));
+      if (hostRules) {
+        hostRules.update(dt);
+        gameplay.applySnapshot(JSON.parse(JSON.stringify(hostRules.snapshot())));
+      }
       gameplay.update(dt);
-      doodle?.update(dt, gameplay.player);
+      doodle?.update(dt, gameplay.remote ? [gameplay.player, gameplay.remote] : gameplay.player);
       world.update(dt, gameplay.player.pos);
       renderer.render(scene, camera);
       const p = gameplay.player;
@@ -189,12 +259,13 @@
         `${p.floorId} (${p.pos.x.toFixed(2)}, ${p.pos.y.toFixed(2)}, ${p.pos.z.toFixed(2)}) yaw ${p.yaw.toFixed(2)} pitch ${p.pitch.toFixed(2)}`,
         `held=${p.held} crouch=${p.crouched} sprint=${p.sprinting} hidden=${p.hidden} link=${p.onLink?.kind ?? '-'} vis=${p.visibility().toFixed(2)}`,
         doodle ? `doodle ${doodle.state} (${doodle.pos.x.toFixed(1)}, ${doodle.pos.z.toFixed(1)})` : 'doodle off',
+        coopRole ? `co-op ${coopRole}: hands ${JSON.stringify((hostRules ?? gameplay.debug.rules).items.hands())} partner ${gameplay.remote ? 'here' : 'away'}` : '',
         'click to look · WASD · Shift sprint · C crouch · E/click use · right click item · G drop · F light',
         '',
         ...log,
       ].join('\n');
     });
-    window.__dev = { THREE, bus, world, gameplay, scene, camera, renderer, get doodle() { return doodle; } };
+    window.__dev = { THREE, bus, world, gameplay, scene, camera, renderer, hostRules, get doodle() { return doodle; } };
   </script>
 </body>
 </html>

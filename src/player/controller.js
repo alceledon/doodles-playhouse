@@ -15,6 +15,7 @@ import { isTextEntry, isTouchMode } from '../core/device.js';
 import { combineMove, idleStick } from './joystick.js';
 import { bodyHeight, canStand, overlappingY, pushOut, slideMove, targetSpeed, updateStamina, wishDir } from './movement.js';
 import { createPathFollower, yawOf } from './path.js';
+import { bodyVisibility } from './remote.js';
 
 const R = PLAYER_BODY.radius;
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -33,11 +34,14 @@ const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
  * @param {() => void} [opts.onSecondary] right click
  * @param {() => void} [opts.onDrop]      G
  * @param {(code: string) => void} [opts.onKey]  any other key (debug keys)
+ * @param {'host'|'guest'} [opts.id]      player.id: the co-op role ('host' solo)
+ * @param {Object} [opts.start]           the spot it starts at (default anchors.startBed)
  */
 export function createPlayerController({
   camera, canvas, world, bus, tuning, settings = SETTINGS_DEFAULTS,
   extraBlockers = () => [], heldItemId = () => null,
   onPrimary = () => {}, onSecondary = () => {}, onDrop = () => {}, onKey = () => {},
+  id = 'host', start = world.anchors.startBed,
 }) {
   const floorY = Object.fromEntries(world.floors.map((f) => [f.id, f.y]));
   let sensitivity = settings.mouseSensitivity ?? 1;
@@ -50,9 +54,9 @@ export function createPlayerController({
     invertY = !!s.invertY;
   });
 
-  const start = world.anchors.startBed;
   let eyeH = PLAYER_BODY.eyeHeight;
   const player = {
+    id,
     pos: copy(start.pos),
     floorId: start.floorId,
     yaw: start.rotY ?? 0,
@@ -69,17 +73,14 @@ export function createPlayerController({
     moving: false,
     /** {linkId, kind} while riding a slide or crawling a tunnel */
     onLink: null,
+    /** co-op knock-out: caught and spectating (Gameplay.setDown) */
+    down: false,
     eyePos() {
       const h = hideSpot();
       if (h) return copy(h.eyePos);
       return { x: player.pos.x, y: player.pos.y + eyeH, z: player.pos.z };
     },
-    visibility() {
-      if (player.hidden) return 0;
-      const light = world.lightLevelAt(player.eyePos(), player.floorId);
-      const v = light + (player.flashlightOn ? tuning.flashlight.visibility : 0);
-      return clamp(v * (player.crouched ? tuning.crouchVisibility : 1), 0, 1);
-    },
+    visibility: () => bodyVisibility(player, world, tuning),
   };
   const hideSpot = () => (player.hideSpotId ? world.anchors.hideSpots.find((h) => h.id === player.hideSpotId) : null);
 

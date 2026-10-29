@@ -47,9 +47,10 @@ export function listWords(words) {
 }
 
 /**
- * @param {{world: import('../core/contracts.js').World, bus: import('../core/events.js').Bus, tuning: Object}} opts
+ * @param {{world: import('../core/contracts.js').World, bus: import('../core/events.js').Bus, tuning: Object, who?: (playerId: string) => Object}} opts
+ *   who: extra payload fields naming the player behind an escape or a Jeep start (co-op)
  */
-export function createLocks({ world, bus, tuning }) {
+export function createLocks({ world, bus, tuning, who = () => ({}) }) {
   const open = new Set();
   const unlockedRoutes = new Set();
   let escapedRoute = null;
@@ -109,31 +110,44 @@ export function createLocks({ world, bus, tuning }) {
   const jeepReady = () => open.has(LOCKS.JEEP_KEY) && open.has(LOCKS.JEEP_BATTERY);
 
   /** @returns {'notReady'|'doorClosed'|'escaped'} — starting is loud either way */
-  function startJeep() {
+  function startJeep(playerId) {
     if (!jeepReady()) return 'notReady';
     const spot = anchors.garage.jeep;
-    bus.emit(EVENTS.JEEP_STARTED, { pos: copy(spot.pos), floorId: spot.floorId });
-    bus.emit(EVENTS.NOISE, { pos: copy(spot.pos), floorId: spot.floorId, loudness: tuning.noise.jeep, kind: 'jeep' });
+    bus.emit(EVENTS.JEEP_STARTED, { pos: copy(spot.pos), floorId: spot.floorId, ...who(playerId) });
+    bus.emit(EVENTS.NOISE, { pos: copy(spot.pos), floorId: spot.floorId, loudness: tuning.noise.jeep, kind: 'jeep', ...who(playerId) });
     if (!garageDoor().isOpen) return 'doorClosed';
-    escape(ROUTES.GARAGE);
+    escape(ROUTES.GARAGE, playerId);
     return 'escaped';
   }
 
   /** @returns {'locked'|'escaped'} */
-  function openFrontDoor() {
+  function openFrontDoor(playerId) {
     const door = frontDoor();
     if (door.locked) return 'locked';
     door.setOpen(true, 'player');
-    escape(ROUTES.FRONT_DOOR);
+    escape(ROUTES.FRONT_DOOR, playerId);
     return 'escaped';
   }
 
   /** ESCAPED goes out once per run. */
-  function escape(route) {
+  function escape(route, playerId) {
     if (escapedRoute) return false;
     escapedRoute = route;
-    bus.emit(EVENTS.ESCAPED, { route });
+    bus.emit(EVENTS.ESCAPED, { route, ...who(playerId) });
     return true;
+  }
+
+  /** Co-op: the lock state as plain JSON, and putting it back silently (doors travel separately). */
+  const save = () => ({ open: [...open], routes: [...unlockedRoutes], escaped: escapedRoute });
+  function load(state) {
+    const same = (set, list) => set.size === list.length && list.every((x) => set.has(x));
+    const changed = !same(open, state.open ?? []) || !same(unlockedRoutes, state.routes ?? []) || escapedRoute !== (state.escaped ?? null);
+    open.clear();
+    for (const id of state.open ?? []) open.add(id);
+    unlockedRoutes.clear();
+    for (const r of state.routes ?? []) unlockedRoutes.add(r);
+    escapedRoute = state.escaped ?? null;
+    return changed;
   }
 
   /** Debug: every lock open, both exit doors unlocked (the garage door still needs opening). */
@@ -154,6 +168,8 @@ export function createLocks({ world, bus, tuning }) {
     openFrontDoor,
     escape,
     openAll,
+    save,
+    load,
     garagePowered: () => open.has(LOCKS.FUSE_BOX),
     routeUnlocked: (route) => unlockedRoutes.has(route),
     escaped: () => escapedRoute,

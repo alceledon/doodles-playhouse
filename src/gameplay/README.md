@@ -1,15 +1,16 @@
 # Gameplay: the player and every game rule
 
-`createGameplay({ scene, camera, canvas, world, bus, rng, difficulty, settings })` in
+`createGameplay({ scene, camera, canvas, world, bus, rng, difficulty, settings, coop })` in
 [`index.js`](index.js) returns the Gameplay object from `src/core/contracts.js`. It replaces
-`src/core/stubs/gameplay.js`.
+`src/core/stubs/gameplay.js`. Without `coop` it's the solo game; with `coop: {role, rule}` it's
+one side of an online two-player run (see [Co-op](#co-op)).
 
 ## How it fits together
 
 | File | What it does | three? |
 |---|---|---|
-| [`rules.js`](rules.js) | The brain. It decides what a look target says (`describe`) and what a click does (`interact`, `useHeld`), and handles the ball, treats, darts, traps and the day flow. | no |
-| [`items.js`](items.js) | Item names, per-run spawn picks (`pickSpawns`) and the one-hand rule (`createItems`). | no |
+| [`rules.js`](rules.js) | The brain. It decides what a look target says (`describe`) and what a click does (`interact`, `useHeld`), for whichever player acts. It handles the ball and darts in flight, treats, traps, walking out, the day flow, and co-op snapshots and intents. | no |
+| [`items.js`](items.js) | Item names, per-run spawn picks (`pickSpawns`), and the hands (`createItems`): one per player, one item each. | no |
 | [`locks.js`](locks.js) | The padlock, plank, keypad, fuse box, Jeep and attic chest locks. It runs both escapes and emits `LOCK_OPENED`, `EXIT_UNLOCKED`, `JEEP_STARTED` and `ESCAPED`. | no |
 | [`keypad.js`](keypad.js) | The per-run code, which drawing shows which digit, and the dials. | no |
 | [`traps.js`](traps.js) | Which squeaky/blocks candidates get a prop, plus proximity triggers for all traps. | no |
@@ -19,7 +20,9 @@
 | [`../player/movement.js`](../player/movement.js) | Circle-vs-box sliding, the crouch/stand height rule, speeds and stamina. | no |
 | [`../player/path.js`](../player/path.js) | Following a nav link's polyline (slides, tunnels). | no |
 | [`../player/controller.js`](../player/controller.js) | The Player object: input, pointer lock, look, walking, stairs, crouch, sprint, head bob, footsteps, flashlight, hiding, riding links. | yes |
-| [`view.js`](view.js) | Meshes for items, the padlock, plank and dials, the crayon code digits, trap props, treats, the flying ball and darts, and the fuse box/opener lights. | yes |
+| [`../player/remote.js`](../player/remote.js) | Co-op: the partner as a Player, eased toward their poses; `makePose`, and the visibility formula both players share. | no |
+| [`../player/avatar.js`](../player/avatar.js) | Co-op: the partner's low-poly kid, with walk and crouch poses, the held item, and a flashlight that lights the house. | yes |
+| [`view.js`](view.js) | Meshes for items, the padlock, plank and dials, the crayon code digits, trap props, treats, the flying ball and darts (drawn from the rules' state), and the fuse box/opener lights. | yes |
 | [`viewmodel.js`](viewmodel.js) | The held item in the bottom-right of the view. | yes |
 | [`models.js`](models.js), [`textures.js`](textures.js) | Procedural low-poly models and 16–48 px canvas textures. | yes |
 
@@ -64,6 +67,8 @@ taps at client coordinates and `debug.touch` is the controls object.
 
 ## Items
 
+- **One hand each.** Every rule takes the acting player; `player.id` picks the hand (`'host'` in a
+  solo run). In co-op each player has their own hand, and everything below applies per hand.
 - **One hand.** If you pick something up while holding another item, the old one goes down
   where the new one was, inside the same drawer if the new one came from a drawer. That swap
   makes a small noise.
@@ -79,7 +84,8 @@ taps at client coordinates and `debug.touch` is the controls object.
   (`TREAT_DROPPED`). `TREAT_EATEN` removes it. Dropped treats can't be picked back up.
 - **Launcher.** It starts with 2 shots. Firing emits `DART_FIRED {origin, dir, range}`, where
   `range` is cut short at the first wall, floor or ceiling. It also emits a small `NOISE`.
-  - The dart flies visibly. A miss lands on the floor as a dart you can pick up again.
+  - The dart flies visibly (`rules.darts`, stepped in `rules.update`). A miss lands on the floor
+    as a dart you can pick up again.
   - After a `DOODLE_HIT` the dart is gone.
 - **Ball.** Right click throws it with bouncy physics (`BALL_THROWN`).
   - The first hard bounce makes the loud `NOISE`; later bounces are quieter.
@@ -149,6 +155,97 @@ taps at client coordinates and `debug.touch` is the controls object.
   - Sprint steps also make a 7 m `NOISE`. Walking is silent to Doodle by default
     (`noise.walkStep`), and crouch-walking always is.
 
+## Co-op
+
+`createGameplay({..., coop: {role: 'host'|'guest', rule: 'shared'|'knockout'}})`. Without `coop`
+nothing below happens, and no event carries a `playerId`.
+
+**Who does what.**
+- **Host:** runs every rule for both bodies: items and hands, locks, keypad, traps, treats, the
+  ball and darts, walking out. Events about a player carry `playerId` (and `PICKUP` a `pos`).
+- **Guest:**
+  - It builds the same run from the same seed: spawns, code, drawings and traps come from rng
+    forks, so both initial snapshots are equal.
+  - It never changes shared state. Clicks that would (`rules.needsHost`) become intents. Clicks on
+    its own body run locally: hiding, slides and tunnels, the keypad housing's hint.
+  - Its prompt shows `…` until a snapshot answers the intent, for up to 3 s. The answer's
+    message ("Locked: needs the Hammer") then shows like a local one.
+  - It emits only its own body's events: `FOOTSTEP`, step and splash `NOISE`, `HIDE`/`UNHIDE`,
+    `LINK_*`, plus `HELD` when its hand changes in a snapshot. It runs no traps, no ball physics,
+    and no reactions to `BALL_FETCHED`, `BALL_RETURNED`, `TREAT_EATEN` or `DOODLE_HIT`.
+  - Trap props animate from the host's replayed `TRAP` events.
+- **Both:**
+  - Any event with `remote: true` is ignored by the rules.
+  - Treat ids (`treat1`...), flying-dart ids (`dart1`...) and missed-dart items are only ever made
+    on the host.
+  - Two players can't share a hide spot: "Someone's already hiding here". You can't close a door
+    on your partner either.
+
+**Hooks** (on the Gameplay object only in co-op):
+
+| Hook | Side | What it does |
+|---|---|---|
+| `player.id` | both | The role. `'host'` in a solo run. |
+| `remote` | both | A getter: the partner as a Player (`src/player/remote.js`), or `null` before their first pose and after they leave. Doodle senses it like the local player. `remote.held` is their hand in the shared state. |
+| `pose()` | both | The local PlayerPose, rounded to cm and centiradians. Send it ~10 Hz. |
+| `setRemotePose(pose)` | both | The partner's newest pose. Walking eases in; jumps over 2.5 m and hiding snap. `null` means they left: hidden from Doodle and not drawn. |
+| `snapshot()` | host | Shared state as plain JSON (see below). |
+| `applyIntent('guest', intent)` | host | Run a guest's click on its behalf, with the same rules. A repeated `n` is ignored, and a down guest's intents are answered but do nothing. |
+| `applySnapshot(snap)` | guest | Mirror the host. Idempotent and silent. Doors and containers get `setLocked`, then `setOpen(open, 'remote', {silent: true})`. Returns whether anything changed. |
+| `setIntentSink(fn)` | guest | Where intents go. Without one, shared-state clicks do nothing. |
+| `setDown(id, down)` | both | Knock-out. A down player can't act, sets off no traps, and can't walk out. On the host, their held item drops where they are. The avatar hides while the partner is down. |
+| `onCaught(playerId?)` | both | As before for the local player. On the host, `onCaught('guest')` drops the guest's item where the guest was; on the guest the host does the dropping. |
+
+`startDay` wakes the guest at `anchors.startBed2`, or 0.7 m to the right of `startBed` if there's
+no `startBed2` (`rules.wakeSpot`). The host also keeps the traps under the guest's bed quiet.
+Either player walking out of the open front door, or starting the Jeep with the garage open, sends
+`ESCAPED {route, playerId}` (host only).
+
+**Intent** (guest → host, plain JSON):
+```js
+{
+  n: 7,                                   // per guest, increasing; the snapshot's acks answer it
+  kind: 'primary' | 'secondary' | 'drop', // click / E or a tap, right click, G
+  target: {kind, id, dial?} | null,       // the look target's interact tag
+  body: {
+    pos, floorId, crouched,               // the guest's feet (the host acts from here)
+    eye, dir,                             // eye point and unit look direction (throws, darts)
+    drop:  {pos, floorId},                // the floor spot 0.45 m ahead (G)
+    treat: {pos, floorId},                // the floor spot 0.6 m ahead (a treat)
+    range,                                // a dart's reach before the first wall, floor or ceiling
+  },
+}
+```
+
+**Snapshot** (host → guest, plain JSON, about 1.5 KB on the mini-house):
+```js
+{
+  v: 1,
+  items: [{id, i: itemId, w: where, p: [x, y, z], f: floorId, c: containerId, r: rotY, u: uses}],
+  hands: {host: instId | null, guest: instId | null},
+  locks: {open: [lockId], routes: [route], escaped: route | null},
+  keypad: '0420',                          // the dials as they stand
+  treats: [{id, p, f}],
+  ball: instId | null,                     // the ball Doodle fetches
+  darts: [{id, o: origin, d: dir, e: end distance, h: 1 if it hit, f}],  // in flight; the guest animates them
+  toppled: [trapSpotId],
+  doors: [[doorId, open 0|1, locked 0|1]],
+  boxes: [[containerId, open 0|1, locked 0|1]],
+  acks: {guest: [n, message | null]},      // the last intent run, and its one-off message
+}
+```
+Numbers are rounded to mm, so the snapshot only changes when something does. The exception is a
+flying ball, which changes every frame until it lands; the guest's view eases toward it. A dart's
+progress isn't sent: the guest flies its copy from the moment it first sees it.
+
+**Wiring for main.js** (the coordinator's side):
+- Host: send `snapshot()` when its JSON changes, `pose()` ~10 Hz, and pass `applyIntent('guest', m.intent)`.
+- Guest: `setIntentSink(i => session.send('intent', {intent: i}))`, and call `applySnapshot` on each
+  `state` value.
+- Both: call `setRemotePose` on each partner `pose`, and pass `[player, remote]` to Doodle while
+  `remote` isn't null.
+- Audio gets `remote` for the partner's flashlight and steps.
+
 ## Tuning knobs (`tuning.js`)
 
 | Group | Knobs |
@@ -179,6 +276,8 @@ radii. Practice uses few traps.
   - `keypadCode()`
 - **Extras for dev pages and automation:**
   - `rules`, `controller`, `view`
+  - Co-op: `partner` (the remote player's controller: `setPose`, `setDown`, `isPresent`) and
+    `avatar`.
   - `lookAt(pos)`, `target()`
   - `interact()`, `use()`, `drop()`. These run the real look-raycast path, so a script can play
     the game without pointer lock.
@@ -198,4 +297,11 @@ radii. Practice uses few traps.
   through walls.
 - The side panel can open all locks, give items, teleport, start the next day, and toggle noclip.
 - Add `?seed=N` for a fixed layout and `?difficulty=hard` for more traps.
+- **Co-op in one tab** (no network):
+  - `?coop=host`: you host. A scripted guest walks a loop in front of your bed with its
+    flashlight on. The panel makes it grab the nearest item (an intent run on your rules) or
+    knocks it out.
+  - `?coop=guest`: you're the guest. Your clicks become intents for a host rules instance inside
+    the page (its own world, not drawn), with 120 ms of fake lag, and you mirror its snapshot
+    every frame. A scripted host walks the loop.
 - The full game with this area loaded: `/?debug=1&real=gameplay`.
