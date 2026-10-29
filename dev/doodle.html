@@ -6,6 +6,10 @@
   Serve the repo root (node tools/serve.mjs 8082, or the doodle-dev launch
   config) and open /dev/doodle.html. Params: ?difficulty=easy|normal|hard,
   ?seed=N, ?view=player|chase|map, ?wake=seconds.
+
+  Co-op: G drops a fake second player (the 'guest') where you stand, J removes
+  it, K toggles the knock-out rule (a catch downs that player and Doodle hunts
+  the other; otherwise any catch ends the day, the shared rule).
 -->
 <html lang="en">
 <head>
@@ -155,18 +159,64 @@
       ballState = 'world';
     });
 
+    // ---- a fake second player (co-op) ------------------------------------------------
+    // A Player in the contract shape standing still where you dropped it, so the brain has
+    // two to choose between. It's the 'guest'; the stub player is the 'host'.
+    let guest = null;
+    const guestMesh = new THREE.Mesh(new THREE.BoxGeometry(0.4, PLAYER_BODY.height, 0.3), propMat(0x3a7cff));
+    guestMesh.visible = false;
+    scene.add(guestMesh);
+    function placeGuest() {
+      const pos = here();
+      guest = {
+        id: 'guest', pos, floorId: player.floorId, yaw: player.yaw, pitch: 0, crouched: false, sprinting: false,
+        hidden: false, hideSpotId: null, flashlightOn: false, held: null, stamina: 1, moving: false, onLink: false, down: false,
+        eyePos: () => ({ x: guest.pos.x, y: guest.pos.y + PLAYER_BODY.eyeHeight, z: guest.pos.z }),
+        visibility: () => Math.min(1, 0.25 + world.lightLevelAt(guest.pos, guest.floorId)),
+      };
+      guestMesh.position.set(pos.x, pos.y + PLAYER_BODY.height / 2, pos.z);
+      guestMesh.visible = true;
+      say(`guest placed on ${guest.floorId}`);
+    }
+    function removeGuest() {
+      guest = null;
+      guestMesh.visible = false;
+    }
+    let knockout = false;
+    const players = () => (guest ? [player, guest] : player);
+    const byId = (id) => (id === 'guest' ? guest : player);
+
     // ---- catches -----------------------------------------------------------------
     const banner = document.getElementById('banner');
     let caughtTimer = 0;
-    bus.on(EVENTS.CAUGHT, ({ how }) => {
-      banner.textContent = `CAUGHT (${how})`;
+    let releaseTimer = 0;
+    let releaseId = null;
+    bus.on(EVENTS.CAUGHT, ({ how, playerId = 'host' }) => {
+      banner.textContent = `CAUGHT ${playerId} (${how})`;
       banner.style.display = 'block';
       doodle.setActive(false);
-      caughtTimer = 2.5;
+      const other = byId(playerId === 'guest' ? 'host' : 'guest');
+      if (knockout && guest && other && !other.down) {
+        // Knock-out: that player is down, and after a beat Doodle lets go and hunts the other.
+        byId(playerId).down = true;
+        if (playerId === 'guest') guestMesh.material.color.setHex(0x333344);
+        releaseId = playerId;
+        releaseTimer = 1.5;
+      } else caughtTimer = 2.5;
     });
+    function release() {
+      banner.style.display = 'none';
+      doodle.releaseCatch(releaseId);
+      doodle.setActive(true);
+      say(`released ${releaseId}`);
+    }
     function nextDay() {
       banner.style.display = 'none';
+      releaseTimer = 0;
       if (player.hidden) bus.emit(EVENTS.UNHIDE, { spotId: player.hideSpotId });
+      player.down = false;
+      if (guest) guest.down = false;
+      guestMesh.material.color.setHex(0x3a7cff);
       gameplay.startDay(1);
       doodle.reset(world.anchors.kennel, { wakeDelay: wake });
       doodle.setActive(true);
@@ -224,6 +274,9 @@
         case 'KeyR': return nextDay();
         case 'KeyM': return nextPose();
         case 'KeyH': return doodle.model.setMood(doodle.model.mood === 'hunt' ? 'calm' : 'hunt');
+        case 'KeyG': return placeGuest();
+        case 'KeyJ': return removeGuest();
+        case 'KeyK': knockout = !knockout; return say(`catch rule: ${knockout ? 'knockout' : 'shared'}`);
         case 'KeyV': view = views[(views.indexOf(view) + 1) % views.length]; return say(`view: ${view}`);
         case 'Digit1': case 'Digit2': case 'Digit3':
           difficulty = ['easy', 'normal', 'hard'][Number(e.code.at(-1)) - 1];
@@ -254,11 +307,15 @@
     renderer.setAnimationLoop((now) => {
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
+      frame(dt);
+    });
+    function frame(dt) {
       t += dt;
       gameplay.update(dt);
-      doodle.update(dt, player);
+      doodle.update(dt, players());
       world.update(dt, player.pos);
       if (caughtTimer > 0 && (caughtTimer -= dt) <= 0) nextDay();
+      if (releaseTimer > 0 && (releaseTimer -= dt) <= 0) release();
       if (dartFlash > 0 && (dartFlash -= dt) <= 0) dartLine.visible = false;
       placeViews();
       renderer.render(scene, view === 'chase' ? chaseCam : view === 'map' ? mapCam : camera);
@@ -270,13 +327,15 @@
         `  ${doodle.floorId} (${f(doodle.pos.x)}, ${f(doodle.pos.y)}, ${f(doodle.pos.z)})  speed ${f(doodle.speed)}  pose ${doodle.model.pose}  mood ${doodle.model.mood}${doodle.carrying ? '  carrying ' + doodle.carrying : ''}`,
         `  sight ${sight.visible ? 'SEES YOU' : sight.reason ?? ''}  dist ${Number.isFinite(sight.dist) ? f(sight.dist) : '-'}  range ${f(s.sightRange ?? 0)}  awareness ${(s.awareness ?? 0).toFixed(2)}`,
         `  heard ${s.lastHeard ? `${s.lastHeard.kind} ${f(s.clock - s.lastHeard.t)}s ago` : '-'}   crumbs ${s.crumbs?.length ?? 0}  pools ${s.pools?.length ?? 0}  treats ${treats.size}  ball ${ballState}`,
+        `TARGET  ${s.targetId ?? '-'}   ${(s.players ?? []).map((q) => `${q.id}${q.down ? ' DOWN' : ''}${q.released ? ' released' : ''}${q.visible ? ' seen' : ''} ${q.awareness.toFixed(2)}`).join('   ')}   rule ${knockout ? 'knockout' : 'shared'}`,
         `PLAYER  ${player.floorId} (${f(player.pos.x)}, ${f(player.pos.y)}, ${f(player.pos.z)})  vis ${player.visibility().toFixed(2)}${player.hidden ? '  HIDDEN' : ''}${player.crouched ? '  crouched' : ''}${player.flashlightOn ? '  flashlight' : ''}`,
         `view ${view}`,
         '',
         'click: mouse look   WASD move   Shift sprint   C crouch   F flashlight   E doors / hide   N loud noise',
         'T treat   B throw ball   P pick up ball   X dart   O overlay   R reset day   V view   M poses   H mood   1/2/3 difficulty',
+        'G drop a fake guest player here   J remove it   K knock-out rule on/off',
       ].join('\n');
-    });
+    }
 
     addEventListener('resize', () => {
       for (const c of [camera, chaseCam]) {
@@ -286,7 +345,15 @@
       renderer.setSize(innerWidth, innerHeight);
     });
 
-    window.__dev = { THREE, bus, world, gameplay, player, scene, camera, renderer, PLAYER_BODY, setView: (v) => (view = v) };
+    window.__dev = {
+      THREE, bus, world, gameplay, player, scene, camera, renderer, PLAYER_BODY,
+      setView: (v) => (view = v),
+      guest: () => guest,
+      /** Step the page by hand (a hidden tab gets no animation frames): `seconds` of 1/30 s frames. */
+      tick(seconds) {
+        for (let k = 0; k < Math.round(seconds * 30); k++) frame(1 / 30);
+      },
+    };
     spawnDoodle();
   </script>
 </body>

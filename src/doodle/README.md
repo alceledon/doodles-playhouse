@@ -1,7 +1,7 @@
 # Doodle: the hunter
 
-`createDoodle({ scene, world, bus, rng, difficulty })` in [index.js](index.js) returns the
-contract's `Doodle` (see `src/core/contracts.js`). Everything that thinks is pure logic and
+`createDoodle({ scene, world, bus, rng, difficulty, puppet })` in [index.js](index.js) returns
+the contract's `Doodle` (see `src/core/contracts.js`). Everything that thinks is pure logic and
 runs under `node --test`. Only the model, textures and debug overlay import `three`.
 
 | File | What it does | three? |
@@ -12,10 +12,11 @@ runs under `node --test`. Only the model, textures and debug overlay import `thr
 | [senses.js](senses.js) | Hearing, sight (cone + collider line of sight), catch reach, dart ray test | no |
 | [scent.js](scent.js) | The player's scent: crumbs every ~1 m, and pools where they stand still or hide | no |
 | [brain.js](brain.js) | `createDoodleCore()`: the state machine and event protocols. It's the whole Doodle except `model` | no |
+| [puppet.js](puppet.js) | `createDoodlePuppet()`: the co-op guest's Doodle, drawn from the host's snapshots. No AI, no bus | no |
 | [model.js](model.js) | The low-poly golden doodle mesh and all its poses | yes |
 | [textures.js](textures.js) | Pixel textures: curly fur, collar, "DOODLE" tag, tennis ball, eyeshine glow | yes |
 | [overlay.js](overlay.js) | Debug overlay: path, sight cone, hearing ring, noises, scent | yes |
-| [index.js](index.js) | Glues the brain to the model and the overlay | yes |
+| [index.js](index.js) | Glues the brain (or the puppet) to the model and the overlay | yes |
 
 ## How it moves
 - **Paths:** A\* runs on the shared grid with `AGENTS.DOODLE`, so it never enters
@@ -60,6 +61,59 @@ contract:
   doors. It can still lean over a ball-pit rim.
 - No catch while you're inside a `PLAYER_ONLY` cell.
 - No catch while it's asleep or stunned.
+
+## Co-op (two players)
+See CONTRACTS.md, "Co-op". The host's game runs this brain for both players; the guest's game
+runs a puppet.
+
+- **`update(dt, players)`** takes one Player or an array. Players with `down: true` are skipped
+  entirely: not seen, not caught, no scent.
+- **Per-player memory**, keyed by `player.id` (a Player with no id is `'host'`): sight,
+  awareness, last sighting, hide spot, link (slide/tunnel) blindness and its own scent.
+- **Who it hunts** (`pickTarget`, every think):
+  - The visible player it's most aware of; otherwise the nearest, by 2D distance plus 6 m per
+    floor apart.
+  - **Hysteresis:** the current target gets a margin (`targetStick` awareness, or
+    `targetStickDist` m), and while it's in view it's kept at least `targetHold` s.
+  - **Mid-chase** it only switches to a player it has fully spotted (awareness 1), never to one
+    it merely knows is closer. A pull-out locks the target to the player in the hiding spot.
+  - `debug.senses.targetId` names the target, and `debug.senses.players` lists each record.
+- **Smell** follows the freshest trail across both players' scents. A sniffed hiding pool is
+  checked against its owner's hide.
+- **Events** key their state by `payload.playerId ?? 'host'`: `HIDE`, `UNHIDE`, `LINK_ENTER`,
+  `LINK_EXIT`. The guest's arrive replayed with `remote: true`; they count like local ones, and
+  so does the guest's `NOISE`.
+  - A seen `HIDE` starts a pull-out of that player, unless it's chasing the other player and can
+    still see them.
+  - `LINK_ENTER` only ends a chase when it's the chased player going in.
+- **Catching:** every player in reach is checked, the target first. `CAUGHT` carries
+  `{how, playerId}`. A Player with no `id` (the solo tests' fake player) gets `{how}` only, as
+  before co-op; a missing playerId means the host.
+- **`releaseCatch(playerId)`** (knock-out): leaves CATCH, forgets that player until `reset()`
+  (even if its Player is still passed and not yet `down`), and clears its scent and hide. Then
+  it stands in SEARCH for `releasePause` s: no moving, no catching, deaf to noises, treats and
+  balls, though it keeps noticing whoever is in view. After that it INVESTIGATEs a random point
+  within `releaseHuntFuzz` m of the nearest remaining player (or their hiding spot), and its
+  senses take it from there. The pause clock only runs while it's active, so a cutscene doesn't
+  eat it. If nobody is left it searches where it stands.
+- **`snapshot()`:** `{pos, yaw, pitch, pose, mood, carrying, speed, state, floorId, target}` as
+  plain JSON, rounded to millimeters. `target` is the hunted player's id (or null).
+- **The puppet** (`createDoodle({..., puppet: true})`, puppet.js):
+  - No brain, no bus emits, no bus reactions. `stun()` and `releaseCatch()` are no-ops: the host
+    decides those.
+  - `applySnapshot(snap)` stores the target. `state`, `speed` and `floorId` mirror the latest
+    snapshot at once, for Audio and UI.
+  - `update(dt)` glides the drawn position and yaw toward the snapshot: it extrapolates the
+    snapshot along its velocity (from the last two, at most 0.15 s ahead) and closes the gap at
+    14/s. A velocity over 9 m/s is a teleport and isn't extrapolated.
+  - It jumps instead of gliding on the first snapshot, after `reset()` or `setActive(true)`, on a
+    gap over 3 m, and on a floor change more than 1 m away. Stairs flip `floorId` halfway up the
+    ramp, so a near floor change glides rather than hitching.
+  - Pose, mood and carrying follow the snapshot. `setActive(false)` stops following (a cutscene
+    owns the model); back on, it jumps to the latest snapshot.
+  - `reset(spot)` puts it asleep at the spot and drops any older snapshot, so a stale one can't
+    drag it back to the catch.
+  - `bounds()` works as on the brain.
 
 ## Senses
 - **Hearing:** a `NOISE` is heard when its 2D distance is ≤ `loudness × hearing ×
@@ -124,6 +178,9 @@ Normal is the baseline. Easy is slower and duller; Hard is faster and keener.
 | `treatIgnoreChance` | 0 | 0 | 0.5 |
 | `trackTime` (s) | 0.8 | 1.2 | 1.6 |
 
+Co-op knobs, the same on every difficulty: `targetHold` 1 s, `targetStick` 0.3,
+`targetStickDist` 3 m, `releasePause` 5 s, `releaseHuntFuzz` 4 m.
+
 Other shared knobs are documented inline in `tuning.js`. `createDoodle` and `createDoodleCore`
 also accept a `tuning` object of overrides, which the tests use.
 
@@ -171,6 +228,12 @@ also accept a `tuning` object of overrides, which the tests use.
     - V cycles the view: first person, a camera on Doodle's face, top-down map.
     - M cycles every pose with the AI frozen; H toggles the mood.
     - 1/2/3 switch difficulty.
+    - G drops a fake second player (the `guest`, a blue box) where you stand; J removes it.
+    - K toggles the knock-out rule: a catch downs that player, and 1.5 s later the page calls
+      `releaseCatch()` so Doodle hunts the other one. Off, any catch ends the day.
+    - The info panel's TARGET line shows who it's hunting and each player's awareness.
+  - **`__dev.tick(seconds)`** steps the page by hand in 1/30 s frames, for a hidden tab that gets
+    no animation frames. `__dev.guest()` is the fake guest Player, or null.
   - **Overlay:**
     - Cyan: the path and target.
     - Yellow fan: sight, red while it sees you.
@@ -190,3 +253,8 @@ also accept a `tuning` object of overrides, which the tests use.
   - Scent following, and no dithering at unreachable scent.
 - **protocol.test.js:** ball fetch, cancel and carry through `reset()`, treats (incl. Hard's
   ignore rate), darts per difficulty, `LINK_ENTER`, `{state, prev}` chaining.
+- **coop.test.js:** two players. It chases the visible one, ignores a `down` one, switches to
+  the other after `releaseCatch` (pause included), doesn't flip-flop, keeps hides and links per
+  player, hears replayed `NOISE`, follows the fresher trail, and `CAUGHT` names the player.
+  Also `snapshot()` JSON, and the puppet: it emits nothing, mirrors state, converges on a host
+  Doodle fed at 10 Hz, jumps big gaps, and holds still while inactive.

@@ -1,18 +1,21 @@
-// Doodle entry point: createDoodle({ scene, world, bus, rng, difficulty }) → Doodle.
+// Doodle entry point: createDoodle({ scene, world, bus, rng, difficulty, puppet }) → Doodle.
 //
 // The brain (brain.js, pure logic) does all the thinking and moving; this file
 // adds the three.js model and keeps the two in sync. See README.md.
+// puppet: true (the co-op guest) swaps the brain for puppet.js, which only
+// follows the host's snapshots and never touches the bus.
 //
 // Debug (?debug=1): window.__game.doodle.debug.overlay(true) shows the path,
 // sight cone, hearing ring, noises and scent. &doodleOverlay=1 turns it on at start.
 
 import { createDoodleCore } from './brain.js';
+import { createDoodlePuppet } from './puppet.js';
 import { createDoodleModel } from './model.js';
 import { createDoodleOverlay } from './overlay.js';
 
-/** createDoodle({ scene, world, bus, rng, difficulty }) → Doodle */
-export function createDoodle({ scene, world, bus, rng, difficulty = 'normal', tuning = null }) {
-  const doodle = createDoodleCore({ world, bus, rng, difficulty, tuning });
+/** createDoodle({ scene, world, bus, rng, difficulty, puppet }) → Doodle */
+export function createDoodle({ scene, world, bus, rng, difficulty = 'normal', tuning = null, puppet = false }) {
+  const doodle = puppet ? createDoodlePuppet({ world }) : createDoodleCore({ world, bus, rng, difficulty, tuning });
   const model = createDoodleModel();
   scene.add(model.object3d);
   doodle.model = model;
@@ -36,9 +39,9 @@ export function createDoodle({ scene, world, bus, rng, difficulty = 'normal', tu
   }
 
   const think = doodle.update;
-  doodle.update = (dt, player) => {
+  doodle.update = (dt, players) => {
     const wasActive = doodle.active;
-    think(dt, player);
+    think(dt, players);
     // Includes the frame it was switched off in (CAUGHT freezes it mid-update),
     // so the cutscene starts from the pounce rather than a frozen run cycle.
     if (wasActive) sync();
@@ -76,6 +79,7 @@ export function createDoodle({ scene, world, bus, rng, difficulty = 'normal', tu
 
   /** Toggle the debug overlay. Returns whether it's now on. */
   doodle.debug.overlay = (on = !overlay) => {
+    if (puppet) return false; // nothing to show: the senses live on the host
     if (on && !overlay) overlay = createDoodleOverlay(scene);
     else if (!on && overlay) {
       overlay.dispose();
