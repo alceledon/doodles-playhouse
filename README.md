@@ -46,8 +46,8 @@ offers to post your time under a name of up to 6 letters or numbers.
   `fetch` (no Firebase SDK). The code is in `src/leaderboard/`. The rules in
   [firestore.rules](firestore.rules) let anyone read and add runs, check every field, and
   forbid changing or deleting one.
-- **Config:** `src/leaderboard/config.js`. While its `projectId` is empty, the game shows no
-  leaderboard at all.
+- **Config:** `src/leaderboard/config.js`, which points at the `doodles-playhouse` Firebase
+  project. With an empty `projectId`, the game shows no leaderboard at all.
 - **Dev runs can't post:** URLs with `debug`, `seed`, `real`, `stub` or `tick` read the board
   but never post to it.
 - **Set it up:**
