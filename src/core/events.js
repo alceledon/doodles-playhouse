@@ -10,6 +10,12 @@
  * Every event name in the game, with its payload. Emit with EVENTS.X, never a
  * raw string, so a typo fails loudly (emit() rejects unknown names).
  * Positions are plain {x, y, z} in meters (Three.js axes: Y up).
+ *
+ * Co-op (see docs/CONTRACTS.md, "Co-op"): payloads about a player may carry `playerId`
+ * ('host'|'guest'); a missing playerId means the local player. Any payload may carry
+ * `remote: true` when the net layer replays an event from the partner's game: those are for
+ * sound and notices only (state arrives in snapshots), so game logic ignores them and the net
+ * layer never sends them back.
  */
 export const EVENTS = Object.freeze({
   // ---- sound the Doodle can hear (any area may emit) ----
@@ -19,21 +25,22 @@ export const EVENTS = Object.freeze({
   FOOTSTEP: 'footstep',           // {pos, floorId, surface, sprint, crouch} — audio only; loud steps also emit NOISE
   PROMPT: 'prompt',               // {text: string|null} — interaction hint under the crosshair; null hides it
   HELD: 'held',                   // {itemId: ItemId|null, uses: number|null}
-  PICKUP: 'pickup',               // {itemId}
-  DROP: 'drop',                   // {itemId, pos, floorId}
+  PICKUP: 'pickup',               // {itemId, instId?, pos?, playerId?}
+  DROP: 'drop',                   // {itemId, pos, floorId, playerId?}
   LOCK_OPENED: 'lockOpened',      // {lockId: LockId}
   EXIT_UNLOCKED: 'exitUnlocked',  // {route: 'frontDoor'|'garage'}
-  HIDE: 'hide',                   // {spotId, pos, floorId}
-  UNHIDE: 'unhide',               // {spotId}
-  LINK_ENTER: 'linkEnter',        // {linkId, kind: 'slide'|'tunnel'} — player starts a slide/crawl
-  LINK_EXIT: 'linkExit',          // {linkId, kind, pos, floorId}
-  TRAP: 'trap',                   // {kind: TrapKind, pos, floorId}
+  HIDE: 'hide',                   // {spotId, pos, floorId, playerId?}
+  UNHIDE: 'unhide',               // {spotId, playerId?}
+  LINK_ENTER: 'linkEnter',        // {linkId, kind: 'slide'|'tunnel', playerId?} — player starts a slide/crawl
+  LINK_EXIT: 'linkExit',          // {linkId, kind, pos, floorId, playerId?}
+  TRAP: 'trap',                   // {kind: TrapKind, pos, floorId, playerId?}
+  KEYPAD_ROLLED: 'keypadRolled',  // {index, digit, pos?, playerId?} — a keypad dial turned (sound; the digits ride the snapshot)
   BALL_THROWN: 'ballThrown',      // {pos, floorId}
   BALL_LANDED: 'ballLanded',      // {pos, floorId} — Doodle goes to fetch
   TREAT_DROPPED: 'treatDropped',  // {treatId, pos, floorId}
   DART_FIRED: 'dartFired',        // {origin, dir /* unit vector */, range} — Doodle does its own hit test
   JEEP_STARTED: 'jeepStarted',    // {pos, floorId}
-  ESCAPED: 'escaped',             // {route: 'frontDoor'|'garage'}
+  ESCAPED: 'escaped',             // {route: 'frontDoor'|'garage', playerId?}
   PAUSE_REQUEST: 'pauseRequest',  // {} — Esc pressed, pointer lock lost, page hidden, or the touch Pause button
 
   // ---- Doodle (emitted by Doodle) ----
@@ -46,12 +53,12 @@ export const EVENTS = Object.freeze({
   DOODLE_HIT: 'doodleHit',        // {} — a dart hit
   DOODLE_STUNNED: 'doodleStunned',// {seconds}
   DOODLE_RECOVERED: 'doodleRecovered', // {}
-  CAUGHT: 'caught',               // {how: 'tackle'|'pulledOut'}
+  CAUGHT: 'caught',               // {how: 'tackle'|'pulledOut', playerId?}
 
   // ---- world (emitted by World) ----
-  DOOR_OPENED: 'doorOpened',      // {doorId, by: 'player'|'doodle'}
+  DOOR_OPENED: 'doorOpened',      // {doorId, by: 'player'|'doodle'|'remote'}
   DOOR_CLOSED: 'doorClosed',      // {doorId, by}
-  CONTAINER_OPENED: 'containerOpened', // {containerId}
+  CONTAINER_OPENED: 'containerOpened', // {containerId, by?}
   CONTAINER_CLOSED: 'containerClosed', // {containerId}
 
   // ---- run flow (emitted by main.js / core) ----
@@ -61,6 +68,13 @@ export const EVENTS = Object.freeze({
   GAME_OVER: 'gameOver',          // {difficulty, seconds}
   PAUSED: 'paused',               // {}
   RESUMED: 'resumed',             // {}
+
+  // ---- co-op (emitted by main.js from the net session) ----
+  PLAYER_DOWN: 'playerDown',      // {playerId, local: boolean, name} — knock-out: caught, now spectating (local) or partner caught
+  PLAYER_UP: 'playerUp',          // {playerId, local: boolean} — back in play (next day)
+  PARTNER_JOINED: 'partnerJoined',// {name}
+  PARTNER_LEFT: 'partnerLeft',    // {name, reason: 'left'|'timeout'}
+  NET_STATUS: 'netStatus',        // {status: 'ok'|'waiting', lagMs: number|null} — waiting = nothing heard from the partner for a few seconds
 
   // ---- settings (emitted by UI) ----
   SETTINGS_CHANGED: 'settingsChanged', // {settings: Settings}

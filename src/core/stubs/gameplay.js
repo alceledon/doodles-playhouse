@@ -24,6 +24,7 @@ export function createGameplay({ scene, camera, canvas, world, bus, settings = S
 
   const start = world.anchors.startBed;
   const player = {
+    id: 'host',
     pos: copy(start.pos),
     floorId: start.floorId,
     yaw: start.rotY ?? 0,

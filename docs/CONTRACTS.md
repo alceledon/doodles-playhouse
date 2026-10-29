@@ -18,7 +18,7 @@ Read those three files first; they're the source of truth. This document explain
 
 | Owner | Owns (creates and edits only these) |
 |---|---|
-| **Coordinator** | `index.html`, `style.css`, `package.json`, `README.md`, `CLAUDE.md`, `.nojekyll`, `.gitignore`, `.claude/`, `tools/`, `vendor/`, `src/main.js`, `src/areas.js`, `src/core/**`, `src/leaderboard/**`, `firestore.rules`, `tests/core/**`, `tests/leaderboard/**`, `docs/**`, `dev/template.html` |
+| **Coordinator** | `index.html`, `style.css`, `package.json`, `README.md`, `CLAUDE.md`, `.nojekyll`, `.gitignore`, `.claude/`, `tools/`, `vendor/`, `src/main.js`, `src/areas.js`, `src/core/**`, `src/leaderboard/**`, `firestore.rules`, `src/net/**`, `database.rules.json`, `tests/core/**`, `tests/leaderboard/**`, `tests/net/**`, `docs/**`, `dev/template.html` |
 | **World** | `src/world/**`, `dev/world.html`, `tests/world/**` |
 | **Doodle** | `src/doodle/**`, `dev/doodle.html`, `tests/doodle/**` |
 | **Gameplay** | `src/player/**`, `src/gameplay/**`, `dev/gameplay.html`, `tests/gameplay/**` |
@@ -166,6 +166,115 @@ PAUSE_REQUEST → freeze → ui.showPause → resume (unfreeze) | quit (title)
   except while paused), plus `audio.update` and `ui.update`. Then it renders.
 - **Cutscenes** move the camera and `doodle.model.object3d` while controls are frozen. main.js
   keeps rendering.
+
+## Co-op (two players online)
+
+One player hosts and sends an invite link (`?join=CODE`); the other joins, and both play one
+run against one Doodle.
+
+**Catch rules.** The host picks one in the co-op menu (`COOP_RULES`):
+- **`shared`:** any catch ends the day for both players.
+- **`knockout`:** the caught player drops their item and watches through the partner's eyes.
+  - If the partner is caught too, the day ends for both.
+  - If the partner escapes, the run is won for both.
+  - Both wake up at the next day.
+
+**Either player walking out of an open exit wins for both.**
+
+### Transport and protocol (`src/net/`, coordinator)
+- **Transport.** Firebase Realtime Database over REST: `fetch` for writes, `EventSource` to hear
+  changes.
+  - The database URL is in `src/net/config.js`. Empty means co-op is off.
+  - With `?net=local`, two tabs of one browser play through `localStorage` and need no server.
+  - The rules are in `database.rules.json`.
+- **Room layout.** See `room.js`.
+  - The host writes `rooms/CODE/h`, and the guest writes `rooms/CODE/g`.
+  - Each side listens only to the other's half.
+- **Traffic.** See `protocol.js`.
+  - **Latest-wins channels:** `pose` (both sides, ~10 Hz), plus `doodle` (~10 Hz) and `state`
+    (on change), both written by the host.
+  - **An ordered message list:** `hello`, `start`, `bus`, `intent`, `flow`, `ping`/`pong`, `bye`.
+- **`session.js`** wraps it all as `hostRoom()` / `joinRoom()` → a Session with `set`, `send`,
+  `tick`, `on` and `close`.
+- **Areas never touch the net layer.** main.js wires it to the hooks below.
+
+### Who runs what
+- **The host's game is the authority.**
+  - It runs Doodle's brain, Gameplay's rules (items, hands, locks, keypad, traps, treats, ball,
+    darts) and the doors and containers.
+  - It decides every catch, using the guest's latest pose.
+- **The guest's game mirrors the host's.**
+  - It builds the same run from the same `{seed, difficulty}`. Layout, spawns, code and traps
+    come from rng forks, so they match without being sent.
+  - Its Doodle is a **puppet**.
+  - Its Gameplay applies the host's snapshots and sends its actions as **intents**.
+- **Each game moves its own player.** Movement stays instant, and the pose goes to the partner.
+
+### What each area provides (all additive; solo play must behave exactly as before)
+- **Gameplay** (`createGameplay({..., coop: {role, rule}})`):
+  - **`player.id`** is the role. **`remote`** is the partner, as a Player built from
+    `setRemotePose()` and drawn as an avatar with a flashlight. **`pose()`** is the local
+    player's pose.
+  - **Host:**
+    - **`snapshot()`:** plain JSON of every shared thing, including each player's hand.
+    - **`applyIntent('guest', intent)`:** runs the guest's action against a proxy of the remote
+      player. It's the same rules code, with a per-player hand.
+    - **Traps** arm and fire per player body.
+    - **Ball and dart** simulation runs here.
+  - **Guest:**
+    - **`setIntentSink(fn)`:** `primary`, `secondary`, drop and taps become intents. Prompts
+      still come from `describe()` against the mirrored state.
+    - **`applySnapshot(snap)`:** idempotent and silent. Doors and containers use
+      `setOpen(open, 'remote', {silent: true})`, and it emits `HELD` when the local hand
+      changes.
+    - **Events:** emits only its own body's events (`FOOTSTEP` and its `NOISE`, `HIDE`/`UNHIDE`,
+      `LINK_*`).
+  - **Wake spot:** the guest wakes at `anchors.startBed2`, or beside `startBed` if there isn't
+    one.
+  - **`setDown(id, down)`** is for knock-out.
+  - **Replays:** ignore any event with `remote: true`. State never arrives that way.
+- **Doodle:**
+  - **`update(dt, players)`** takes a Player or an array.
+    - It senses each player, hunts the best-sensed one, and skips `down` ones.
+    - It keeps scent, hide and link state per `playerId`.
+    - `CAUGHT` carries `playerId`.
+  - **`snapshot()`** and **`releaseCatch(id)`** are for knock-out.
+  - **`createDoodle({..., puppet: true})`** follows `applySnapshot()` with interpolation, emits
+    nothing and runs no AI.
+  - **Remote events:** reacts to the guest's `NOISE`/`HIDE`/`LINK_*`, which are replayed with
+    `playerId: 'guest', remote: true`.
+- **World:**
+  - `door.setOpen(open, by, {silent})` and `container.setOpen(open, by, {silent})`.
+  - An optional `anchors.startBed2` (the top bunk).
+- **Presentation:**
+  - **Title, lobby and messages:**
+    - The title's "Play with a friend" resolves `showTitle()` with `{coop: CoopChoice}`.
+    - `showLobby(info) → LobbyHandle` and `showMessage(text)`.
+    - Notices come from `PLAYER_DOWN`, `PARTNER_JOINED`/`PARTNER_LEFT` and `NET_STATUS`.
+    - The knock-out "Spectating NAME" banner.
+  - **Win and leaderboard:** `showWin(results.coop)` and co-op leaderboard tabs.
+  - **Partner sounds:** positional, for payloads with `remote: true` or a non-local `playerId`
+    that carry a `pos`.
+  - **HUD:** fed only by the local player.
+  - **Cutscene:** `playCatch({knockout: true})` ends on the lick, without the fade.
+
+### Events across the wire
+- **`protocol.js#FORWARDED` lists what each side forwards.**
+  - The host forwards everything the guest should hear.
+  - The guest forwards only its body's events.
+- **Replays arrive with `remote: true` and the sender's `playerId`.**
+  - Game logic ignores them; the exception is the host's Doodle, which reacts to the guest's
+    senses.
+  - Audio and UI treat them as normal, positioned at `pos`.
+- **Run flow never travels as bus events.** The host's main.js sends `flow` messages for day
+  start, catches and escapes, and the guest's main.js follows them.
+- **New events:** `PLAYER_DOWN`, `PLAYER_UP`, `PARTNER_JOINED`, `PARTNER_LEFT`, `NET_STATUS`
+  (main.js emits these) and `KEYPAD_ROLLED` (Gameplay).
+
+### Testing co-op without a server
+1. Serve the game.
+2. Open `/?debug=1&net=local` in one tab and host from the title.
+3. Open the invite link in a second tab.
 
 ## Running things
 - **All tests:** `npm test` (Node's built-in runner, no dependencies). Put yours in

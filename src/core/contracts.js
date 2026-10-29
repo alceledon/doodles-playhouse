@@ -120,6 +120,22 @@ export const INTERACT_KINDS = Object.freeze([
   'lock', // Gameplay only: id = LockId (padlock/plank hardware it builds)
 ]);
 
+/**
+ * Co-op (two players online). A solo run's one player is 'host'. In co-op the host's game runs
+ * Doodle and every shared thing (items, locks, doors, traps); the guest's game mirrors it.
+ */
+export const PLAYER_IDS = Object.freeze({ HOST: 'host', GUEST: 'guest' });
+export const PLAYER_ID_LIST = Object.freeze(Object.values(PLAYER_IDS));
+
+/**
+ * What a catch does in co-op, picked by the host in the co-op menu:
+ *  shared    any catch ends the day for both players
+ *  knockout  the caught player watches through the partner's eyes; the day ends when both are
+ *            caught, and if the partner escapes the run is won for both
+ */
+export const COOP_RULES = Object.freeze({ SHARED: 'shared', KNOCKOUT: 'knockout' });
+export const COOP_RULE_IDS = Object.freeze(Object.values(COOP_RULES));
+
 export const SETTINGS_DEFAULTS = Object.freeze({
   mouseSensitivity: 1, // multiplier, 0.2 .. 3
   invertY: false,
@@ -179,7 +195,10 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  * @property {Vec3} pos           center of the doorway at floor level
  * @property {boolean} isOpen
  * @property {boolean} locked     locked doors can't be opened by anyone (front door, garage door until unlocked)
- * @property {(open: boolean, by?: 'player'|'doodle') => boolean} setOpen  false if locked; emits DOOR_OPENED/CLOSED + NOISE
+ * @property {(open: boolean, by?: 'player'|'doodle'|'remote', opts?: {silent?: boolean}) => boolean} setOpen
+ *   false if locked; emits DOOR_OPENED/CLOSED + NOISE. by 'remote' = applied from the co-op host's
+ *   state. silent: true changes the door (animation, colliders) but emits nothing (co-op state sync;
+ *   the sound arrives separately as a replayed event)
  * @property {(locked: boolean) => void} setLocked
  * @property {Box} collider       blocks while closed (included in world.colliders() when closed)
  * @property {CellRef[]} cells    nav cells in the doorway (flagged NAV.DOOR)
@@ -191,12 +210,14 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  * @property {Vec3} pos           interaction point
  * @property {boolean} isOpen
  * @property {boolean} locked     only the attic chest starts locked
- * @property {(open: boolean) => boolean} setOpen   false if locked; emits CONTAINER_OPENED/CLOSED
+ * @property {(open: boolean, by?: 'player'|'remote', opts?: {silent?: boolean}) => boolean} setOpen
+ *   false if locked; emits CONTAINER_OPENED/CLOSED (+ NOISE). by and silent work as on Door
  * @property {(locked: boolean) => void} setLocked
  * @property {Spot} itemSpot      where an item inside it rests
  *
  * @typedef {Object} Anchors
  * @property {Spot} startBed        player wakes here (pos = feet, rotY = facing)
+ * @property {Spot} [startBed2]     co-op: the guest wakes here (the top bunk). Gameplay falls back to beside startBed
  * @property {Spot} kennel          Doodle sleeps here
  * @property {Spot} kennelBed       Doodle drops the fetched ball here
  * @property {Spot[]} patrol        Doodle patrol waypoints, spread over every floor
@@ -242,9 +263,30 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  * @property {boolean} moving
  * @property {() => Vec3} eyePos
  * @property {() => number} visibility   0 .. 1 — how easy to see right now (light level, flashlight, crouch). 0 while hidden
+ * @property {'host'|'guest'} [id]    PLAYER_IDS; 'host' in a solo run
+ * @property {boolean} [onLink]       riding a slide or crawling a tunnel right now
+ * @property {boolean} [down]         co-op knock-out: caught and spectating. Doodle ignores a down player
+ *
+ * @typedef {Object} PlayerPose   one player's state as sent to the partner, plain JSON
+ * @property {'host'|'guest'} id
+ * @property {Vec3} pos
+ * @property {FloorId} floorId
+ * @property {number} yaw
+ * @property {number} pitch
+ * @property {boolean} crouched
+ * @property {boolean} sprinting
+ * @property {boolean} moving
+ * @property {boolean} hidden
+ * @property {string|null} hideSpotId
+ * @property {boolean} flashlightOn
+ * @property {string|null} held
+ * @property {boolean} onLink
+ * @property {boolean} down
  *
  * @typedef {Object} Gameplay — src/gameplay/index.js: createGameplay(opts) → Gameplay
- * @property {Player} player
+ * @property {Player} player          the local player (player.id says which one)
+ * @property {Player|null} [remote]   co-op: the partner as a Player built from their poses (Doodle
+ *   senses it like the local one); drawn as an avatar. null in a solo run
  * @property {(dt: number) => void} update
  * @property {(day: number) => void} startDay   put the player in startBed, re-arm traps; items/locks persist across days
  * @property {() => void} onCaught              drop the held item where the player is
@@ -254,7 +296,21 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  * @property {() => void} [dispose]
  * @property {{giveItem: (id: string) => void, setNoclip: (on: boolean) => void, teleport: (pos: Vec3, floorId: FloorId) => void, openAllLocks: () => void, keypadCode: () => string}} [debug]
  *
- * createGameplay({ scene, camera, canvas, world, bus, rng, difficulty, settings }) → Gameplay
+ * Co-op hooks (present when createGameplay got `coop`; see docs/CONTRACTS.md, "Co-op"):
+ * @property {() => PlayerPose} [pose]                       the local player's pose, sent ~10 Hz
+ * @property {(pose: PlayerPose|null) => void} [setRemotePose]   the partner's latest pose (null: partner left)
+ * @property {() => Object} [snapshot]                       host: every shared thing, plain JSON (Gameplay's own format)
+ * @property {(snap: Object) => void} [applySnapshot]        guest: mirror the host's snapshot, idempotently and silently
+ * @property {(fn: (intent: Object) => void) => void} [setIntentSink]   guest: where its actions go instead of running here
+ * @property {(playerId: 'host'|'guest', intent: Object) => void} [applyIntent]   host: run the guest's action on its behalf
+ * @property {(playerId: 'host'|'guest', down: boolean) => void} [setDown]   knock-out: a down player can't act; its held
+ *   item drops where it was caught (host). The local player's controls stay main.js's business
+ *
+ * createGameplay({ scene, camera, canvas, world, bus, rng, difficulty, settings, coop? }) → Gameplay
+ *   coop: {role: 'host'|'guest', rule: 'shared'|'knockout'} for an online run; absent when solo.
+ *   With the same seed and difficulty, both peers' Gameplay must build identical initial state
+ *   (spawns, code, traps), so only changes travel. Intents and snapshots are Gameplay's own JSON;
+ *   the net layer carries them as is.
  *   - main.js calls update(dt) every frame except while paused.
  *   - While controls are disabled, update() must not move the player or touch the camera
  *     (cutscenes own the camera then) and must ignore input.
@@ -279,14 +335,22 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  * @property {number} speed        current m/s (audio uses it for the collar jingle and panting)
  * @property {DoodleModel} model
  * @property {() => {center: Vec3, radius: number}} bounds   for dart hits and cutscene framing
- * @property {(dt: number, player: Player) => void} update  emits CAUGHT when it gets the player
+ * @property {(dt: number, players: Player|Player[]) => void} update  emits CAUGHT {how, playerId} when it gets
+ *   a player. Co-op passes both players; it hunts whichever it senses best and skips any that is `down`
  * @property {(spot: Spot, opts?: {wakeDelay?: number}) => void} reset   start of day: back to the kennel, SLEEP for wakeDelay s
  * @property {(active: boolean) => void} setActive   false freezes AI (cutscenes, pause)
  * @property {(seconds: number) => void} stun
  * @property {() => void} [dispose]
  * @property {{path: Vec3[], target: Vec3|null, senses: Object}} [debug]
+ * @property {() => Object} [snapshot]          co-op host: {pos, yaw, pitch, pose, mood, carrying, speed, state, floorId, ...}, plain JSON
+ * @property {(snap: Object) => void} [applySnapshot]   co-op guest (puppet): move toward it, interpolating
+ * @property {(playerId: 'host'|'guest') => void} [releaseCatch]   knock-out: let go of a caught player
+ *   (who is now down) and, after a short pause, hunt the other one
  *
- * createDoodle({ scene, world, bus, rng, difficulty }) → Doodle   (not created in practice mode)
+ * createDoodle({ scene, world, bus, rng, difficulty, puppet? }) → Doodle   (not created in practice mode)
+ *   puppet: true on the co-op guest. It runs no AI and emits nothing; it just draws the host's
+ *   Doodle from applySnapshot(). update(dt) still animates; setActive(false) stops it following
+ *   snapshots (a cutscene owns the model then).
  *   - main.js calls update(dt, player) every frame except while paused.
  *   - While inactive (setActive(false)) it runs no AI and emits nothing, but keeps animating its
  *     model, so cutscenes can move model.object3d and call setPose().
@@ -297,16 +361,38 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  *
  * @typedef {Object} UI — src/ui/index.js: createUI(opts) → UI
  * @property {Settings} settings                   current settings (persisted by UI in localStorage)
- * @property {() => Promise<{difficulty: Difficulty}>} showTitle
+ * @property {() => Promise<{difficulty: Difficulty} | {coop: CoopChoice}>} showTitle
+ *   co-op only when createUI got `coop` with enabled true: then the title also offers "Play with a friend"
+ * @property {(info: LobbyInfo) => LobbyHandle} [showLobby]   co-op waiting room (see LobbyInfo)
+ * @property {(text: string) => Promise<void>} [showMessage]  a full-screen message with an OK button
+ *   ("Room not found", "Your friend left"); resolves on OK
  * @property {(day: number) => Promise<void>} showDayCard
  * @property {() => Promise<'resume'|'quit'>} showPause
- * @property {(results: {route: string, days: number, seconds: number, difficulty: Difficulty, best: boolean}) => Promise<void>} showWin
+ * @property {(results: {route: string, days: number, seconds: number, difficulty: Difficulty, best: boolean, coop?: {rule: 'shared'|'knockout', names: string[], canPost: boolean}}) => Promise<void>} showWin
+ *   coop: a co-op win; names = [host, guest]. Only the host may post it (canPost), to that rule's co-op board
  * @property {(info: {difficulty: Difficulty, seconds: number}) => Promise<void>} showGameOver
  * @property {(visible: boolean) => void} setHudVisible
  * @property {(dt: number, ctx: {player: Player|null, doodle: Doodle|null}) => void} update   continuous HUD (stamina)
  * @property {(difficulty: Difficulty, seconds: number) => boolean} recordTime   true if it's a new best
  *
- * createUI({ root /* HTMLElement *\/, bus, leaderboard? }) → UI
+ * @typedef {{role: 'host', name: string, difficulty: Difficulty, rule: 'shared'|'knockout'} | {role: 'join', name: string, code: string}} CoopChoice
+ *   name is already cleaned (leaderboard entries.js#cleanName) and passes nameProblem(); code is upper-case
+ * @typedef {Object} LobbyInfo
+ * @property {'host'|'guest'} role
+ * @property {string} code        room code, shown big
+ * @property {string} link        invite link (host: offer Copy, and Share where navigator.share exists)
+ * @property {string} name        this player's name
+ * @property {string|null} partnerName   null until the friend is in
+ * @property {Difficulty} difficulty
+ * @property {'shared'|'knockout'} rule
+ * @typedef {Object} LobbyHandle
+ * @property {(patch: Partial<LobbyInfo> & {status?: string}) => void} update   e.g. partner joined/left; status is a line of text
+ * @property {Promise<'start'|'cancel'>} result   host: Start (enabled once partnerName is set) or Cancel;
+ *   guest: only Cancel (main.js closes the lobby itself when the host starts)
+ * @property {() => void} close
+ *
+ * createUI({ root /* HTMLElement *\/, bus, leaderboard?, coop? }) → UI
+ *   coop: {enabled: boolean, code?: string}. code = a ?join= link was opened: go straight to joining it.
  *   leaderboard is optional: when it's null/undefined or `enabled` is false, the UI shows nothing
  *   of it. Otherwise the title offers a Leaderboard panel, and showWin offers to post the run
  *   (or says test runs don't count, when `canSubmit` is false). The stub UI ignores it.
@@ -314,6 +400,7 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  * @typedef {Object} LeaderboardEntry
  * @property {string} id         Firestore document id
  * @property {string} name       1–6 of A–Z 0–9
+ * @property {string} [name2]    co-op boards: the guest's name
  * @property {number} seconds    run time (state.seconds), 2 decimals
  * @property {number} days       days used, 1..MAX_DAYS
  * @property {'frontDoor'|'garage'} route
@@ -323,15 +410,17 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  *   (src/leaderboard/fake.js: createFakeLeaderboard(opts) has the same shape, for ?board=fake and tests)
  * @property {boolean} enabled     false when no Firebase project is configured
  * @property {boolean} canSubmit   enabled, and not a dev run (debug/seed/real/stub/tick params)
- * @property {(difficulty: Difficulty, limit?: number) => Promise<LeaderboardEntry[]>} top   fastest first, default 10
- * @property {(run: {name: string, seconds: number, days: number, route: string, difficulty: Difficulty}) => Promise<{id: string, rank: number|null, entry: LeaderboardEntry}>} submit
- *   validates (src/leaderboard/entries.js), posts, then looks up the place; rank is null if that lookup failed
- * @property {(difficulty: Difficulty, seconds: number) => Promise<number>} rankOf   1 + runs strictly faster
+ * @property {(difficulty: Difficulty, limit?: number, opts?: {coop?: 'shared'|'knockout'}) => Promise<LeaderboardEntry[]>} top   fastest first, default 10
+ * @property {(run: {name: string, name2?: string, seconds: number, days: number, route: string, difficulty: Difficulty, coop?: 'shared'|'knockout'}) => Promise<{id: string, rank: number|null, entry: LeaderboardEntry}>} submit
+ *   validates (src/leaderboard/entries.js), posts, then looks up the place; rank is null if that lookup failed.
+ *   coop + name2: a co-op run, posted to that rule's co-op board
+ * @property {(difficulty: Difficulty, seconds: number, opts?: {coop?: 'shared'|'knockout'}) => Promise<number>} rankOf   1 + runs strictly faster
  *   Every failure rejects with an Error whose `kind` is 'offline' | 'rejected' | 'server' | 'disabled' | 'invalid'
  *   and whose message can be shown to the player.
  *
  * @typedef {Object} Cutscenes — src/ui/index.js: createCutscenes(opts) → Cutscenes
- * @property {(ctx: {player: Player, doodle: Doodle, world: World}) => Promise<void>} playCatch
+ * @property {(ctx: {player: Player, doodle: Doodle, world: World, knockout?: boolean}) => Promise<void>} playCatch
+ *   knockout: the run goes on with the partner, so end on the lick without fading to black
  * @property {(ctx: {player: Player, doodle: Doodle, world: World}) => Promise<void>} playGameOver
  * @property {(ctx: {route: string, player: Player, world: World}) => Promise<void>} playEscape
  * @property {(ctx: {day: number}) => Promise<void>} playWake
@@ -345,7 +434,8 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  * @typedef {Object} Audio — src/audio/index.js: createAudio(opts) → Audio
  * @property {() => void} unlock     call from a user gesture (browser autoplay rules)
  * @property {(v: number) => void} setVolume
- * @property {(dt: number, ctx: {camera: Object, player: Player|null, doodle: Doodle|null, world: World|null}) => void} update
+ * @property {(dt: number, ctx: {camera: Object, player: Player|null, doodle: Doodle|null, world: World|null, remote?: Player|null}) => void} update
+ *   remote: the co-op partner (their flashlight, their footsteps' position)
  * @property {() => void} [dispose]
  *
  * createAudio({ bus, camera }) → Audio

@@ -1,0 +1,51 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "rooms": {
+      "$code": {
+        ".read": "$code.matches(/^[ABCDEFGHJKMNPQRSTUVWXYZ2-9]{6}$/)",
+        ".write": "!newData.exists()",
+        "meta": {
+          ".write": "!data.exists() && $code.matches(/^[ABCDEFGHJKMNPQRSTUVWXYZ2-9]{6}$/)",
+          ".validate": "newData.hasChildren(['v', 'host', 'difficulty', 'rule', 'status', 'created'])",
+          "v": { ".validate": "newData.val() === 1" },
+          "host": { ".validate": "newData.isString() && newData.val().matches(/^[A-Z0-9]{1,6}$/)" },
+          "difficulty": { ".validate": "newData.isString() && newData.val().matches(/^(practice|easy|normal|hard)$/)" },
+          "rule": { ".validate": "newData.isString() && newData.val().matches(/^(shared|knockout)$/)" },
+          "created": { ".validate": "newData.isNumber()" },
+          "status": {
+            ".write": "data.exists()",
+            ".validate": "newData.isString() && newData.val().matches(/^(lobby|playing|ended)$/)"
+          },
+          "guest": {
+            ".write": "data.parent().exists() && (!data.exists() || !newData.exists())",
+            ".validate": "newData.isString() && newData.val().matches(/^[A-Z0-9]{1,6}$/)"
+          },
+          "$other": { ".validate": false }
+        },
+        "h": {
+          ".write": "root.child('rooms').child($code).child('meta').exists()",
+          "pose": { ".validate": "newData.isString() && newData.val().length <= 2000" },
+          "doodle": { ".validate": "newData.isString() && newData.val().length <= 2000" },
+          "state": { ".validate": "newData.isString() && newData.val().length <= 40000" },
+          "ack": { ".validate": "newData.isString() && newData.val().length <= 12" },
+          "ev": {
+            "$seq": { ".validate": "$seq.matches(/^e[0-9]{9}$/) && newData.isString() && newData.val().length <= 40000" }
+          },
+          "$other": { ".validate": false }
+        },
+        "g": {
+          ".write": "root.child('rooms').child($code).child('meta').exists()",
+          "pose": { ".validate": "newData.isString() && newData.val().length <= 2000" },
+          "ack": { ".validate": "newData.isString() && newData.val().length <= 12" },
+          "ev": {
+            "$seq": { ".validate": "$seq.matches(/^e[0-9]{9}$/) && newData.isString() && newData.val().length <= 40000" }
+          },
+          "$other": { ".validate": false }
+        },
+        "$other": { ".validate": false }
+      }
+    }
+  }
+}

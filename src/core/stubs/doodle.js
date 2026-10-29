@@ -84,7 +84,11 @@ export function createDoodle({ scene, world, bus, rng }) {
     return d - step;
   }
 
-  function update(dt, player) {
+  function update(dt, players) {
+    // Co-op passes both players: chase the nearest one it could see.
+    const player = [].concat(players ?? [])
+      .filter((p) => p && !p.down && !p.hidden && p.floorId === doodle.floorId)
+      .sort((a, b) => dist2D(doodle.pos, a.pos) - dist2D(doodle.pos, b.pos))[0];
     if (!active) {
       doodle.speed = 0;
       return;
@@ -99,12 +103,12 @@ export function createDoodle({ scene, world, bus, rng }) {
         setState(S.PATROL);
         bus.emit(EVENTS.DOODLE_RECOVERED, {});
       }
-    } else if (player && !player.hidden && player.floorId === doodle.floorId) {
+    } else if (player) {
       setState(S.CHASE);
       moveToward(player.pos, 2.2, dt);
       if (dist2D(doodle.pos, player.pos) < DOODLE_BODY.catchRange) {
         setState(S.CATCH);
-        bus.emit(EVENTS.CAUGHT, { how: 'tackle' });
+        bus.emit(EVENTS.CAUGHT, { how: 'tackle', playerId: player.id ?? 'host' });
       }
     } else {
       if (doodle.state === S.CHASE) bus.emit(EVENTS.LOST_TRACK, {});
