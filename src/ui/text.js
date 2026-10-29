@@ -103,6 +103,37 @@ export function formatTime(seconds) {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
 }
 
+/** Leaderboard times: 5:12.4, 1:02:05.3. Floors to tenths, the way formatTime floors to seconds. */
+export function formatTimeTenths(seconds) {
+  // Round to milliseconds first, so 312.4 (stored as 312.39999…) still reads .4.
+  const tenths = Number.isFinite(seconds) && seconds > 0 ? Math.floor(Math.round(seconds * 1000) / 100) : 0;
+  return `${formatTime(Math.floor(tenths / 10))}.${tenths % 10}`;
+}
+
+/** The leaderboard's words: the title-screen panel and the win screen's post box. */
+export const BOARD_TEXT = Object.freeze({
+  title: 'Leaderboard',
+  columns: Object.freeze(['#', 'Name', 'Time', 'Days', 'Exit']),
+  loading: 'Loading…',
+  offline: 'Couldn’t reach the leaderboard.',
+  empty: 'No escapes yet. Be the first!',
+  retry: 'Retry',
+  testRun: 'Test runs don’t go on the leaderboard.',
+  nameLabel: 'Your name for the leaderboard',
+  namePlaceholder: 'NAME',
+  post: 'Post my time',
+  sending: 'Sending…',
+  topFailed: 'Couldn’t load the top 10.',
+});
+
+/** The board's Exit column. */
+export const ROUTE_SHORT = Object.freeze({ frontDoor: 'Door', garage: 'Jeep' });
+
+/** After posting: "You’re #3 on Normal!", or just that it's posted when the place couldn't be fetched. */
+export function placeText(rank, boardName) {
+  return Number.isInteger(rank) && rank > 0 ? `You’re #${rank} on ${boardName}!` : `Posted to the ${boardName} board!`;
+}
+
 /** Under the day card: "5 days left" … "Last chance". */
 export function daysLeftText(day, maxDays = MAX_DAYS) {
   const left = Math.max(1, maxDays - day + 1);

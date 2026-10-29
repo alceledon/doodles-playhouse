@@ -7,6 +7,7 @@ import {
   createInputModeState,
   getInputMode,
   initialInputMode,
+  isTextEntry,
   needsRotate,
 } from '../../src/core/device.js';
 import { createBus, EVENTS } from '../../src/core/events.js';
@@ -74,4 +75,11 @@ test('INPUT_MODE is a known event', () => {
   bus.on(EVENTS.INPUT_MODE, ({ mode }) => got.push(mode));
   bus.emit(EVENTS.INPUT_MODE, { mode: TOUCH });
   assert.deepEqual(got, [TOUCH]);
+});
+
+test('isTextEntry: text fields are typing, not game keys or a sign of a keyboard', () => {
+  for (const t of [{ tagName: 'INPUT', type: 'text' }, { tagName: 'input' }, { tagName: 'INPUT', type: 'search' }, { tagName: 'TEXTAREA' }, { tagName: 'DIV', isContentEditable: true }])
+    assert.equal(isTextEntry(t), true, JSON.stringify(t));
+  for (const t of [{ tagName: 'INPUT', type: 'range' }, { tagName: 'INPUT', type: 'checkbox' }, { tagName: 'BUTTON' }, { tagName: 'CANVAS' }, { tagName: 'BODY' }, {}, null, undefined, 'INPUT'])
+    assert.equal(isTextEntry(t), false, JSON.stringify(t));
 });

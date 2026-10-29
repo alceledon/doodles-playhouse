@@ -1,14 +1,16 @@
-// UI entry point: createUI({ root, bus }) → UI and createCutscenes(opts) →
-// Cutscenes (see contracts.js). All DOM stays inside `root`; styles come from
-// ui.css next to this file, injected once. In touch mode (EVENTS.INPUT_MODE)
-// the layer gets .dp-touch, prompts and menus switch to touch wording, and
-// picking a difficulty asks for full screen.
+// UI entry point: createUI({ root, bus, leaderboard }) → UI and
+// createCutscenes(opts) → Cutscenes (see contracts.js). All DOM stays inside
+// `root`; styles come from ui.css next to this file, injected once. In touch
+// mode (EVENTS.INPUT_MODE) the layer gets .dp-touch, prompts and menus switch
+// to touch wording, and picking a difficulty asks for full screen. With an
+// enabled leaderboard the title gets a Leaderboard panel and the win screen a
+// box to post the time.
 
 import { EVENTS } from '../core/events.js';
 import { INPUT_MODES, getInputMode, tryFullscreen } from '../core/device.js';
 import { createHud } from './hud.js';
 import { createScreens } from './screens.js';
-import { getStorage, loadBestTimes, loadSettings, recordBestTime, sanitizeSettings, saveSettings } from './settings.js';
+import { getStorage, loadBestTimes, loadName, loadSettings, recordBestTime, sanitizeSettings, saveName, saveSettings } from './settings.js';
 import { el } from './dom.js';
 
 export { createCutscenes } from './cutscenes.js';
@@ -34,8 +36,8 @@ function loadCss() {
   return cssReady;
 }
 
-/** createUI({ root, bus }) → UI */
-export function createUI({ root, bus }) {
+/** createUI({ root, bus, leaderboard }) → UI. `leaderboard` is optional (src/leaderboard/client.js). */
+export function createUI({ root, bus, leaderboard = null }) {
   const ready = loadCss();
   const storage = getStorage();
   const layer = el('div', 'dp-ui');
@@ -57,6 +59,12 @@ export function createUI({ root, bus }) {
   setMode(inputMode);
   bus.on(EVENTS.INPUT_MODE, ({ mode } = {}) => setMode(mode));
 
+  // Missing or not set up (enabled: false) means no leaderboard anything.
+  const board = leaderboard?.enabled ? leaderboard : null;
+  // The board panel opens on the difficulty last played this session.
+  let lastDifficulty = null;
+  bus.on(EVENTS.RUN_START, ({ difficulty } = {}) => (lastDifficulty = difficulty ?? lastDifficulty));
+
   const hud = createHud(layer, bus, { inputMode: () => inputMode });
   const screens = createScreens({
     layer,
@@ -66,6 +74,10 @@ export function createUI({ root, bus }) {
     inputMode: () => inputMode,
     // Runs inside the Play tap, the gesture full screen needs. Desktop stays windowed.
     onPlay: () => inputMode === INPUT_MODES.TOUCH && tryFullscreen(),
+    leaderboard: board,
+    lastDifficulty: () => lastDifficulty,
+    playerName: () => loadName(storage),
+    savePlayerName: (name) => saveName(storage, name),
   });
 
   return {
@@ -87,6 +99,7 @@ export function createUI({ root, bus }) {
     hud,
     openSettings: () => screens.openSettings(),
     openHowTo: () => screens.openHowTo(),
+    openLeaderboard: (difficulty) => screens.openLeaderboard(difficulty),
     changeSettings,
     bestTimes: () => loadBestTimes(storage),
   };

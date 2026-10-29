@@ -11,7 +11,7 @@ import * as THREE from 'three';
 import { EVENTS } from '../core/events.js';
 import { ITEMS, PLAYER_BODY, SETTINGS_DEFAULTS, STOREY_HEIGHT } from '../core/contracts.js';
 import { angleDiff, clamp, copy, lerp, lerpV } from '../core/math.js';
-import { isTouchMode } from '../core/device.js';
+import { isTextEntry, isTouchMode } from '../core/device.js';
 import { combineMove, idleStick } from './joystick.js';
 import { bodyHeight, canStand, overlappingY, pushOut, slideMove, targetSpeed, updateStamina, wishDir } from './movement.js';
 import { createPathFollower, yawOf } from './path.js';
@@ -117,7 +117,7 @@ export function createPlayerController({
   }
 
   const onKeyDown = (e) => {
-    if (!enabled) return;
+    if (!enabled || isTextEntry(e.target)) return; // typing in a text field (a name) isn't playing
     keys.add(e.code);
     if (e.repeat) return;
     switch (e.code) {
@@ -141,6 +141,7 @@ export function createPlayerController({
         onKey(e.code);
     }
   };
+  // Not filtered like keydown: a release only stops a key, and dropping it here can't leave one stuck.
   const onKeyUp = (e) => keys.delete(e.code);
   const onBlur = () => keys.clear();
   const onMouseMove = (e) => {

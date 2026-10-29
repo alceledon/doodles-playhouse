@@ -4,9 +4,11 @@
 
 import { DIFFICULTIES, SETTINGS_DEFAULTS } from '../core/contracts.js';
 import { clamp } from '../core/math.js';
+import { cleanName } from '../leaderboard/entries.js';
 
 export const SETTINGS_KEY = 'doodles-playhouse.settings.v1';
 export const BEST_KEY = 'doodles-playhouse.best.v1';
+export const NAME_KEY = 'doodles-playhouse.name.v1';
 export const QUALITIES = Object.freeze(['low', 'medium', 'high']);
 export const SENSITIVITY_RANGE = Object.freeze({ min: 0.2, max: 3, step: 0.05 });
 
@@ -87,3 +89,14 @@ export function recordBestTime(storage, difficulty, seconds) {
   writeJson(storage, BEST_KEY, best);
   return { isNew: true, best: seconds };
 }
+
+// ---- leaderboard name --------------------------------------------------------------
+
+/** The name last posted to the leaderboard, cleaned to the board's rules ('' if none). */
+export function loadName(storage) {
+  const raw = readJson(storage, NAME_KEY);
+  return typeof raw === 'string' ? cleanName(raw) : '';
+}
+
+/** @returns {boolean} false if it couldn't be saved */
+export const saveName = (storage, name) => writeJson(storage, NAME_KEY, cleanName(name));

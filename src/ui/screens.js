@@ -1,22 +1,41 @@
-// Menus and cards: title (with difficulty select, How to Play and Settings),
-// the DAY N card, pause, win and game over. Each show*() returns a promise
-// that resolves with the player's choice.
+// Menus and cards: title (with difficulty select, How to Play, Settings and
+// the Leaderboard), the DAY N card, pause, win (with posting to the
+// leaderboard) and game over. Each show*() returns a promise that resolves
+// with the player's choice.
 
 import { DIFFICULTIES, MAX_DAYS } from '../core/contracts.js';
 import { createRng } from '../core/rng.js';
 import { cue } from '../audio/cues.js';
+import { NAME_MAX, cleanName, nameProblem, ranksOf, roundSeconds, timeProblem } from '../leaderboard/entries.js';
 import { CRAYONS, crayonDot, crayonText, doodleSketch } from './crayon.js';
 import { button, el, tween, wait } from './dom.js';
 import { QUALITIES, SENSITIVITY_RANGE } from './settings.js';
-import { DIFFICULTY_INFO, HOW_TO_PLAY, ROUTE_TEXT, daysLeftText, formatTime, pauseHint } from './text.js';
+import {
+  BOARD_TEXT,
+  DIFFICULTY_INFO,
+  HOW_TO_PLAY,
+  ROUTE_SHORT,
+  ROUTE_TEXT,
+  daysLeftText,
+  formatTime,
+  formatTimeTenths,
+  pauseHint,
+  placeText,
+} from './text.js';
 import { UI_TUNING } from './tuning.js';
 
 /**
  * @param {{layer: HTMLElement, settings: () => Object, changeSettings: (patch: Object) => void, bestTimes: () => Object,
- *   inputMode?: () => 'touch'|'desktop', onPlay?: () => void}} deps
+ *   inputMode?: () => 'touch'|'desktop', onPlay?: () => void, leaderboard?: Object|null,
+ *   lastDifficulty?: () => string|null, playerName?: () => string, savePlayerName?: (name: string) => void}} deps
  *   inputMode: menus show touch wording and controls in touch mode; onPlay runs inside the Play tap.
+ *   leaderboard: an enabled Leaderboard (contracts.js), or null for none; lastDifficulty picks its first tab;
+ *   playerName / savePlayerName remember the name last posted.
  */
-export function createScreens({ layer, settings, changeSettings, bestTimes, inputMode = () => 'desktop', onPlay = () => {} }) {
+export function createScreens({
+  layer, settings, changeSettings, bestTimes, inputMode = () => 'desktop', onPlay = () => {},
+  leaderboard = null, lastDifficulty = () => null, playerName = () => '', savePlayerName = () => {},
+}) {
   const touch = () => inputMode() === 'touch';
 
   function screen(className = '') {
@@ -124,6 +143,186 @@ export function createScreens({ layer, settings, changeSettings, bestTimes, inpu
     });
   }
 
+  // ---- leaderboard -------------------------------------------------------------
+
+  /**
+   * A board as a table: rank, name, time (tenths), days used, way out. `me` (the
+   * player's own post) is highlighted, or added under a "…" row if it's below these.
+   */
+  function boardTable(rows, me = null) {
+    const ranks = ranksOf(rows);
+    const body = el('tbody', '', rows.map((r, k) => boardRow(r, ranks[k], !!me && r.id === me.id)));
+    if (me && !rows.some((r) => r.id === me.id)) {
+      const gap = el('td', '', '…');
+      gap.colSpan = BOARD_TEXT.columns.length;
+      body.append(el('tr', 'dp-gap', [gap]), boardRow(me, me.rank ?? '?', true));
+    }
+    const head = el('thead', '', [el('tr', '', BOARD_TEXT.columns.map((c) => el('th', '', c)))]);
+    return el('table', 'dp-board', [head, body]);
+  }
+
+  function boardRow(r, rank, mine) {
+    const tr = el('tr', mine ? 'dp-me' : '', [
+      el('td', 'dp-rank', String(rank)),
+      el('td', 'dp-name', String(r.name ?? '')),
+      el('td', 'dp-time', formatTimeTenths(r.seconds)),
+      el('td', 'dp-days', String(r.days ?? '')),
+      el('td', 'dp-route', ROUTE_SHORT[r.route] ?? ''),
+    ]);
+    const when = r.at ? new Date(r.at) : null;
+    if (when && !Number.isNaN(when.getTime())) tr.title = when.toLocaleDateString();
+    return tr;
+  }
+
+  /** Title → Leaderboard: a tab per difficulty with its top 10. Esc or Back closes it. */
+  function openLeaderboard(initial = lastDifficulty()) {
+    if (!leaderboard) return Promise.resolve();
+    return new Promise((resolve) => {
+      const s = screen('dp-solid dp-board-screen');
+      s.append(crayonText('LEADERBOARD', { size: 46, seed: 'board' }).canvas);
+      const panel = el('div', 'dp-panel dp-board-panel');
+      const tabs = el('div', 'dp-tabs');
+      tabs.setAttribute('role', 'tablist');
+      const body = el('div', 'dp-board-body');
+      body.setAttribute('aria-live', 'polite');
+      let current = DIFFICULTIES.includes(initial) ? initial : 'normal';
+      let ticket = 0;
+      let closed = false;
+
+      const tabButtons = DIFFICULTIES.map((d) => {
+        const b = button(DIFFICULTY_INFO[d].name, () => select(d), 'dp-tab');
+        b.dataset.d = d;
+        b.setAttribute('role', 'tab');
+        return b;
+      });
+      tabs.append(...tabButtons);
+
+      const message = (text, extra = null) => el('div', 'dp-board-msg', [el('p', '', text), extra]);
+      async function load() {
+        const mine = ++ticket; // a later tab (or Retry) wins over a slow answer
+        body.replaceChildren(message(BOARD_TEXT.loading));
+        let rows;
+        try {
+          rows = await leaderboard.top(current, 10);
+        } catch {
+          if (mine === ticket && !closed) body.replaceChildren(message(BOARD_TEXT.offline, button(BOARD_TEXT.retry, load)));
+          return;
+        }
+        if (mine !== ticket || closed) return;
+        body.replaceChildren(rows.length ? boardTable(rows) : message(BOARD_TEXT.empty));
+      }
+      function select(d) {
+        current = d;
+        for (const b of tabButtons) b.setAttribute('aria-selected', String(b.dataset.d === d));
+        load();
+      }
+
+      const close = async () => {
+        if (closed) return;
+        closed = true;
+        offEsc();
+        await leave(s);
+        resolve();
+      };
+      const back = button('Back', close, 'dp-primary');
+      const offEsc = onEsc(close);
+      panel.append(tabs, body);
+      s.append(panel, back);
+      select(current);
+      back.focus({ preventScroll: true });
+    });
+  }
+
+  /**
+   * The win screen's leaderboard box: a name field and "Post my time", then the
+   * player's place and the top 10. Returns {root, input} (input is null when
+   * there's nothing to type), or null when there's nothing to show. A run is
+   * posted at most once, and "Back to title" never waits on any of it.
+   */
+  function postBox({ route, days, seconds, difficulty }) {
+    if (!leaderboard) return null;
+    if (!leaderboard.canSubmit) return { root: el('p', 'dp-sub dp-post-note', BOARD_TEXT.testRun), input: null };
+    if (timeProblem(roundSeconds(seconds))) return null; // under a minute: the board won't take it
+    const boardName = DIFFICULTY_INFO[difficulty]?.name ?? difficulty;
+
+    const input = el('input', 'dp-name-input');
+    // Room for more than NAME_MAX: a paste like "al-x!z9" is cut by cleanName after the symbols go, not before.
+    Object.assign(input, { type: 'text', maxLength: NAME_MAX * 4, value: cleanName(playerName()), placeholder: BOARD_TEXT.namePlaceholder });
+    input.spellcheck = false;
+    // Capitals on phone keyboards, no autofill or autocorrect fighting cleanName, and a Send key.
+    const attrs = { autocomplete: 'off', autocorrect: 'off', autocapitalize: 'characters', enterkeyhint: 'send', 'aria-label': BOARD_TEXT.nameLabel };
+    for (const [k, v] of Object.entries(attrs)) input.setAttribute(k, v);
+    const send = button(BOARD_TEXT.post, () => post(), 'dp-primary');
+    const msg = el('p', 'dp-post-msg');
+    msg.setAttribute('aria-live', 'polite');
+    const box = el('section', 'dp-post', [el('p', 'dp-post-label', BOARD_TEXT.nameLabel), el('div', 'dp-post-row', [input, send]), msg]);
+    box.setAttribute('aria-label', BOARD_TEXT.title);
+
+    let state = 'idle'; // idle → sending → posted; a failed send goes back to idle for Retry
+    const tidy = () => {
+      const clean = cleanName(input.value);
+      if (clean !== input.value) input.value = clean;
+      msg.textContent = clean ? nameProblem(clean) ?? '' : ''; // "type a name" waits for a send
+    };
+    input.addEventListener('input', (e) => {
+      if (!e.isComposing) tidy(); // leave an IME composition alone until it ends
+    });
+    input.addEventListener('compositionend', tidy);
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.isComposing) return;
+      e.preventDefault();
+      post();
+    });
+
+    async function post() {
+      if (state !== 'idle') return;
+      const name = cleanName(input.value);
+      input.value = name;
+      const problem = nameProblem(name);
+      if (problem) {
+        msg.textContent = problem;
+        if (!touch()) input.focus({ preventScroll: true });
+        return;
+      }
+      savePlayerName(name);
+      state = 'sending';
+      input.blur(); // on a phone this drops the keyboard, so the answer shows
+      input.disabled = send.disabled = true;
+      send.textContent = BOARD_TEXT.sending;
+      msg.textContent = '';
+      let result;
+      try {
+        result = await leaderboard.submit({ name, seconds, days, route, difficulty });
+      } catch (err) {
+        state = 'idle';
+        input.disabled = send.disabled = false;
+        send.textContent = err?.kind === 'invalid' ? BOARD_TEXT.post : BOARD_TEXT.retry;
+        msg.textContent = err?.message || BOARD_TEXT.offline;
+        if (!touch()) send.focus({ preventScroll: true });
+        return;
+      }
+      state = 'posted';
+      showPlace(result);
+    }
+
+    function showPlace({ id, rank = null, entry = {} }) {
+      const me = { ...entry, id, rank };
+      const list = el('div', 'dp-post-board');
+      box.replaceChildren(el('p', 'dp-post-head', placeText(rank, boardName)), list);
+      const load = async () => {
+        list.replaceChildren(el('p', 'dp-post-msg dp-dim', BOARD_TEXT.loading));
+        try {
+          list.replaceChildren(boardTable(await leaderboard.top(difficulty, 10), me));
+        } catch {
+          list.replaceChildren(el('p', 'dp-post-msg', BOARD_TEXT.topFailed), button(BOARD_TEXT.retry, load, 'dp-quiet'));
+        }
+      };
+      load();
+    }
+
+    return { root: box, input };
+  }
+
   // ---- title -----------------------------------------------------------------
 
   function titleArt() {
@@ -211,6 +410,7 @@ export function createScreens({ layer, settings, changeSettings, bestTimes, inpu
       const footer = el('div', 'dp-row', [
         button('How to Play', () => openHowTo(), 'dp-quiet'),
         button('Settings', () => openSettings(), 'dp-quiet'),
+        leaderboard ? button(BOARD_TEXT.title, () => openLeaderboard(), 'dp-quiet') : null,
       ]);
 
       const sketch = el('div', 'dp-sketch-wrap', [doodleSketch({ size: 190 })]);
@@ -288,9 +488,10 @@ export function createScreens({ layer, settings, changeSettings, bestTimes, inpu
     return dl;
   }
 
-  function endScreen(className, parts, label) {
+  /** `focus`: what takes the keyboard first (default: the button). */
+  function endScreen(className, parts, label, focus = null) {
     return new Promise((resolve) => {
-      const s = screen(`dp-solid dp-instant ${className}`);
+      const s = screen(`dp-solid dp-instant ${className}`.trim());
       let busy = false;
       const b = button(label, async () => {
         if (busy) return;
@@ -299,24 +500,32 @@ export function createScreens({ layer, settings, changeSettings, bestTimes, inpu
         resolve();
       }, 'dp-primary');
       s.append(...parts, b);
-      b.focus({ preventScroll: true });
+      (focus ?? b).focus({ preventScroll: true });
     });
   }
 
   function showWin({ route, days, seconds, difficulty, best }) {
     const record = bestTimes()[difficulty];
+    const post = postBox({ route, days, seconds, difficulty });
     const parts = [
       crayonText('YOU ESCAPED!', { size: 92, seed: 'win', rotate: 0.12 }).canvas,
       el('p', 'dp-sub', ROUTE_TEXT[route] ?? 'You got out.'),
-      stats([
-        ['Difficulty', DIFFICULTY_INFO[difficulty]?.name ?? difficulty],
-        ['Days used', `${days} of ${MAX_DAYS}`],
-        ['Time', formatTime(seconds)],
-        ['Best', record ? formatTime(record) : '—'],
+      // A column; on a phone on its side the post box sits beside the stats (ui.css).
+      el('div', 'dp-win-body', [
+        el('div', 'dp-win-stats', [
+          stats([
+            ['Difficulty', DIFFICULTY_INFO[difficulty]?.name ?? difficulty],
+            ['Days used', `${days} of ${MAX_DAYS}`],
+            ['Time', formatTime(seconds)],
+            ['Best', record ? formatTime(record) : '—'],
+          ]),
+          best ? el('div', 'dp-badge', 'New best time!') : null,
+        ]),
+        post?.root,
       ]),
-      best ? el('div', 'dp-badge', 'New best time!') : null,
-    ].filter(Boolean);
-    return endScreen('', parts, 'Back to title');
+    ];
+    // On a desktop the name field takes the keyboard. On touch, focusing it would pop the keyboard over the screen.
+    return endScreen('dp-win', parts, 'Back to title', post?.input && !touch() ? post.input : null);
   }
 
   function showGameOver({ difficulty, seconds }) {
@@ -331,5 +540,5 @@ export function createScreens({ layer, settings, changeSettings, bestTimes, inpu
     return endScreen('dp-gameover', parts, 'Back to title');
   }
 
-  return { showTitle, showDayCard, showPause, showWin, showGameOver, openSettings, openHowTo };
+  return { showTitle, showDayCard, showPause, showWin, showGameOver, openSettings, openHowTo, openLeaderboard };
 }

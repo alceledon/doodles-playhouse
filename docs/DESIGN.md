@@ -209,6 +209,10 @@ On phones and tablets (Granny's mobile scheme; see `src/gameplay/README.md`):
   - How to Play.
   - Settings: mouse sensitivity, invert Y, volume, render quality. Saved in `localStorage`.
   - Best times per difficulty.
+  - An online leaderboard shared by everyone, one board per difficulty, ranked by fastest
+    time (days used and the way out are shown but don't count). The title screen shows each
+    board's top 10. After an escape of a minute or more you can post your time under a name
+    of up to 6 letters or numbers; dev and test runs can't post.
 
 ## Rendering budget
 - **Materials and fog:** Lambert materials and fog. No shadows.

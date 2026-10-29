@@ -14,7 +14,7 @@ function el(tag, style = '', text = '') {
 const SCREEN = 'position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(5,4,10,.92);color:#f3e9ff;font:20px system-ui,sans-serif;pointer-events:auto;z-index:10';
 const BUTTON = 'font:inherit;padding:8px 22px;border-radius:8px;border:2px solid #f3e9ff;background:#2a1f3d;color:#f3e9ff;cursor:pointer';
 
-/** createUI({ root, bus }) → UI */
+/** createUI({ root, bus, leaderboard? }) → UI. The stub has no leaderboard screens and ignores it. */
 export function createUI({ root, bus }) {
   const settings = { ...SETTINGS_DEFAULTS };
 

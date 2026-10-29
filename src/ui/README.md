@@ -2,7 +2,9 @@
 
 Entry points in [index.js](index.js):
 
-- `createUI({ root, bus })`: menus, cards and the HUD. All its DOM goes inside `root`.
+- `createUI({ root, bus, leaderboard })`: menus, cards and the HUD. All its DOM goes inside
+  `root`. `leaderboard` is optional (`src/leaderboard/`); without an enabled one there's no
+  leaderboard UI.
 - `createCutscenes({ camera, getScene, ui, bus })`: camera moves and overlays between days.
 
 Styles live in [ui.css](ui.css), injected once with a `<link>`. `showTitle()` waits for the
@@ -20,8 +22,8 @@ the crayon lettering, icons and doodles are all drawn on canvas.
 | [crayon.js](crayon.js) | Procedural crayon strokes, lettering and the taped-up drawing of Doodle. |
 | [glyphs.js](glyphs.js) | Pure data: the hand-made stroke font (A–Z, 0–9, `' ! . , ? - :`). |
 | [icons.js](icons.js) | Pixel-art icons for every `ItemId` (32×32, crisp alpha) and the interact hand. |
-| [settings.js](settings.js) | Pure: settings sanitizing, `localStorage` persistence and best times. Storage is passed in. |
-| [text.js](text.js) | Pure: every player-facing string, `formatTime` and `daysLeftText`. |
+| [settings.js](settings.js) | Pure: settings sanitizing, `localStorage` persistence, best times and the leaderboard name. Storage is passed in. |
+| [text.js](text.js) | Pure: every player-facing string, `formatTime`, `formatTimeTenths` and `daysLeftText`. |
 | [motion.js](motion.js) | Pure: easing, paths, the wake blink curve, free-space checks against colliders, and the HUD's vignette and stamina values. |
 | [dom.js](dom.js) | Small DOM helpers and `tween()`, a requestAnimationFrame timeline. |
 
@@ -34,7 +36,15 @@ the crayon lettering, icons and doodles are all drawn on canvas.
     scribbled on.
   - Four difficulty cards, each with a one-line description and the best time if there is one.
     Clicking a card resolves `{ difficulty }`.
-  - "How to Play" and "Settings" open over it.
+  - "How to Play" and "Settings" open over it, and so does "Leaderboard" when `createUI` got
+    an enabled leaderboard.
+- **Leaderboard** (only with an enabled `leaderboard`):
+  - Tabs for the four difficulties. It opens on the one last played this session, else Normal.
+  - The top 10 for the selected tab: rank, name, time in tenths (`formatTimeTenths`, e.g.
+    "5:12.4"), days used and the way out (Door or Jeep). Tied times share a rank.
+  - Loading, error ("Couldn’t reach the leaderboard." and Retry) and empty states. A slow
+    answer for a tab you've left is dropped.
+  - Esc or Back closes it. On a short screen the rows tighten and the screen scrolls.
 - **Settings:**
   - Mouse sensitivity (0.2–3), invert Y, volume (plays a jingle at the new level), and quality
     low/medium/high.
@@ -48,6 +58,21 @@ the crayon lettering, icons and doodles are all drawn on canvas.
   - The screen stays black until it resolves, so the wake blink takes over without a flash.
 - **Pause:** Resume, Settings, How to Play and Quit to title. Resolves `'resume'` or `'quit'`.
 - **Win:** "YOU ESCAPED!", the route, days used, time, best time and a "New best time!" badge.
+  With an enabled leaderboard, a box under the stats (beside them on a phone on its side):
+  - **Test runs** (`canSubmit` false) only get a note: "Test runs don’t go on the leaderboard."
+  - **Runs under a minute** get no box.
+  - **Otherwise** there's a name field and "Post my time" (Enter or the keyboard's Send works
+    too).
+    - The name field is prefilled with the last name used (`doodles-playhouse.name.v1`) and
+      cleaned as you type (A–Z and 0–9, at most 6). A blocked name says why inline.
+    - On a desktop the field takes focus; on touch it doesn't, so the keyboard stays down.
+    - While sending, the button reads "Sending…". On success it shows "You’re #N on Normal!"
+      and the top 10 with your row highlighted, or the top 10, a "…" row and your own row.
+    - A failure shows the reason and Retry. A run is posted at most once.
+  - "Back to title" never waits on the network.
+  - The field opts back into text selection and touch (`user-select: text`,
+    `touch-action: manipulation`), which the page shell turns off. Gameplay's keys and the
+    input-mode watcher ignore keys typed into it.
 - **Game over:** "DOODLE HAS A NEW CHEW TOY." with difficulty and time.
 - **End screens appear opaque at once and fade in only their content.** They follow a cutscene
   that ends on black, so the house never flashes between the two.
@@ -134,5 +159,6 @@ dog), so they frame any model size without knowing its parts.
   - `hud`
   - `openSettings()`
   - `openHowTo()`
+  - `openLeaderboard(difficulty?)`
   - `changeSettings(patch)`
   - `bestTimes()`

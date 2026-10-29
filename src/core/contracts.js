@@ -306,7 +306,29 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  * @property {(dt: number, ctx: {player: Player|null, doodle: Doodle|null}) => void} update   continuous HUD (stamina)
  * @property {(difficulty: Difficulty, seconds: number) => boolean} recordTime   true if it's a new best
  *
- * createUI({ root /* HTMLElement *\/, bus }) → UI
+ * createUI({ root /* HTMLElement *\/, bus, leaderboard? }) → UI
+ *   leaderboard is optional: when it's null/undefined or `enabled` is false, the UI shows nothing
+ *   of it. Otherwise the title offers a Leaderboard panel, and showWin offers to post the run
+ *   (or says test runs don't count, when `canSubmit` is false). The stub UI ignores it.
+ *
+ * @typedef {Object} LeaderboardEntry
+ * @property {string} id         Firestore document id
+ * @property {string} name       1–6 of A–Z 0–9
+ * @property {number} seconds    run time (state.seconds), 2 decimals
+ * @property {number} days       days used, 1..MAX_DAYS
+ * @property {'frontDoor'|'garage'} route
+ * @property {string|null} at    when it was posted (ISO time)
+ *
+ * @typedef {Object} Leaderboard — src/leaderboard/client.js: createLeaderboard(opts) → Leaderboard
+ *   (src/leaderboard/fake.js: createFakeLeaderboard(opts) has the same shape, for ?board=fake and tests)
+ * @property {boolean} enabled     false when no Firebase project is configured
+ * @property {boolean} canSubmit   enabled, and not a dev run (debug/seed/real/stub/tick params)
+ * @property {(difficulty: Difficulty, limit?: number) => Promise<LeaderboardEntry[]>} top   fastest first, default 10
+ * @property {(run: {name: string, seconds: number, days: number, route: string, difficulty: Difficulty}) => Promise<{id: string, rank: number|null, entry: LeaderboardEntry}>} submit
+ *   validates (src/leaderboard/entries.js), posts, then looks up the place; rank is null if that lookup failed
+ * @property {(difficulty: Difficulty, seconds: number) => Promise<number>} rankOf   1 + runs strictly faster
+ *   Every failure rejects with an Error whose `kind` is 'offline' | 'rejected' | 'server' | 'disabled' | 'invalid'
+ *   and whose message can be shown to the player.
  *
  * @typedef {Object} Cutscenes — src/ui/index.js: createCutscenes(opts) → Cutscenes
  * @property {(ctx: {player: Player, doodle: Doodle, world: World}) => Promise<void>} playCatch

@@ -3,11 +3,14 @@ import assert from 'node:assert/strict';
 import { SETTINGS_DEFAULTS } from '../../src/core/contracts.js';
 import {
   BEST_KEY,
+  NAME_KEY,
   SETTINGS_KEY,
   loadBestTimes,
+  loadName,
   loadSettings,
   recordBestTime,
   sanitizeSettings,
+  saveName,
   saveSettings,
 } from '../../src/ui/settings.js';
 
@@ -110,4 +113,19 @@ test('best times ignore junk input and junk storage', () => {
   const corrupt = fakeStorage({ [BEST_KEY]: JSON.stringify({ normal: 'fast', easy: -3, hard: 42, bogus: 1 }) });
   assert.deepEqual(loadBestTimes(corrupt), { hard: 42 });
   assert.deepEqual(recordBestTime(fakeStorage({}, { broken: true }), 'normal', 10), { isNew: true, best: 10 });
+});
+
+test('the leaderboard name is remembered, cleaned, and survives junk or broken storage', () => {
+  const st = fakeStorage();
+  assert.equal(loadName(st), '');
+  assert.equal(saveName(st, 'al'), true);
+  assert.equal(loadName(st), 'AL');
+  saveName(st, 'zoe-the-great');
+  assert.equal(loadName(st), 'ZOETHE');
+  assert.equal(loadName(fakeStorage({ [NAME_KEY]: '{bad json' })), '');
+  assert.equal(loadName(fakeStorage({ [NAME_KEY]: JSON.stringify(42) })), '');
+  assert.equal(loadName(fakeStorage({ [NAME_KEY]: JSON.stringify('max!') })), 'MAX');
+  assert.equal(loadName(fakeStorage({}, { broken: true })), '');
+  assert.equal(saveName(fakeStorage({}, { broken: true }), 'AL'), false);
+  assert.equal(loadName(null), '');
 });

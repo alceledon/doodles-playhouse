@@ -386,6 +386,225 @@
   background: radial-gradient(ellipse at 50% 40%, #2a0d14, #07060c 70%);
 }
 
+/* The win screen's stats and its leaderboard box: a column (side by side on a phone on its side). */
+.dp-win-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+.dp-win-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.dp-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+  pointer-events: none; /* no hover lift either */
+}
+
+/* ---- leaderboard (title panel, win screen box) --------------------------- */
+
+.dp-board-panel {
+  padding: 16px 18px;
+}
+.dp-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.dp-tabs .dp-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 4px;
+  font-size: 15px;
+  white-space: nowrap;
+}
+.dp-tabs .dp-btn[aria-selected='true'] {
+  border-color: var(--orange);
+  background: var(--plum-3);
+}
+.dp-tab[data-d='practice'][aria-selected='true'] { color: var(--green); }
+.dp-tab[data-d='easy'][aria-selected='true'] { color: var(--blue); }
+.dp-tab[data-d='normal'][aria-selected='true'] { color: var(--orange); }
+.dp-tab[data-d='hard'][aria-selected='true'] { color: var(--pink); }
+
+/* Tall enough for a full board, so switching tabs doesn't make the panel jump. */
+.dp-board-body {
+  min-height: 21em;
+}
+.dp-board-body {
+  overflow-x: auto; /* a last resort on a very narrow window; the table is sized to fit */
+}
+.dp-board-msg {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 18em;
+  color: var(--ink-dim);
+  text-align: center;
+}
+.dp-panel .dp-board-msg p {
+  margin: 0;
+}
+
+.dp-board {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.dp-board th {
+  padding: 0 8px 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+  color: var(--ink-dim);
+}
+.dp-board td {
+  padding: 5px 8px;
+  border-top: 1.5px dashed rgba(90, 71, 128, 0.5);
+  white-space: nowrap;
+}
+.dp-board th:nth-child(1),
+.dp-board .dp-rank {
+  width: 2.6em;
+  text-align: right;
+}
+.dp-board .dp-rank {
+  color: var(--ink-dim);
+}
+.dp-board .dp-name {
+  width: 100%; /* takes the slack, so the numbers stay to the right */
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+.dp-board th:nth-child(3),
+.dp-board .dp-time {
+  text-align: right;
+}
+.dp-board .dp-time {
+  font-weight: 700;
+}
+.dp-board th:nth-child(4),
+.dp-board th:nth-child(5),
+.dp-board .dp-days,
+.dp-board .dp-route {
+  text-align: center;
+}
+.dp-board .dp-days,
+.dp-board .dp-route {
+  font-size: 14px;
+  color: var(--ink-dim);
+}
+.dp-board tr.dp-me td {
+  background: rgba(255, 228, 92, 0.13);
+  color: var(--yellow);
+}
+.dp-board tr.dp-gap td {
+  padding: 0 8px;
+  line-height: 1;
+  text-align: center;
+  color: var(--ink-dim);
+}
+.dp-board tr.dp-gap + tr td {
+  border-top: none;
+}
+
+.dp-post {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(460px, 92vw);
+  padding: 14px 18px;
+  border: 2.5px dashed var(--line);
+  border-radius: 20px 14px 22px 16px / 14px 22px 16px 20px;
+  background: rgba(27, 19, 40, 0.7);
+}
+.dp-post-label {
+  margin: 0;
+  font-size: 15px;
+  color: var(--ink-dim);
+}
+.dp-post-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.dp-name-input {
+  width: 8em;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 2.5px solid var(--line);
+  border-radius: 12px 16px 10px 14px / 16px 10px 14px 12px;
+  background: var(--night);
+  color: var(--yellow);
+  caret-color: var(--yellow);
+  font: 800 22px/1.2 var(--font); /* 16px or more, or iOS zooms in on focus */
+  letter-spacing: 0.16em;
+  text-align: center;
+  text-transform: uppercase;
+  color-scheme: dark;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  /* The page shell turns off selection and touch gestures everywhere; a text
+     field needs them back, or iOS won't focus it or let you edit. */
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+  touch-action: manipulation;
+}
+.dp-name-input:focus {
+  border-color: var(--yellow);
+  box-shadow: 0 0 0 3px rgba(255, 228, 92, 0.15);
+}
+.dp-name-input::placeholder {
+  color: var(--ink-dim);
+  opacity: 0.45;
+}
+.dp-name-input:disabled {
+  opacity: 0.6;
+}
+.dp-post-msg {
+  min-height: 1.3em; /* room for a message, so the box doesn't jump */
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.3;
+  text-align: center;
+  color: var(--pink);
+}
+.dp-post-msg.dp-dim {
+  color: var(--ink-dim);
+}
+.dp-post-head {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 800;
+  text-align: center;
+  color: var(--yellow);
+}
+.dp-post-board {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.dp-post-note {
+  font-size: 14px;
+}
+
 /* ---- day card ----------------------------------------------------------- */
 
 .dp-daycard {
@@ -617,7 +836,8 @@
 /* ---- touch (the layer gets .dp-touch in touch mode; controls are in style.css) ---- */
 
 /* Finger-sized menu buttons (Apple's 44 pt minimum). */
-.dp-touch .dp-btn {
+.dp-touch .dp-btn,
+.dp-touch .dp-name-input {
   min-height: 44px;
 }
 
@@ -722,5 +942,72 @@
 @media (max-height: 500px) and (max-width: 620px) {
   .dp-difficulties {
     grid-template-columns: repeat(2, minmax(118px, 240px));
+  }
+}
+
+/* Leaderboard on a short screen: tighter rows (the screen scrolls for the rest). */
+@media (max-height: 500px) {
+  .dp-board-panel {
+    padding: 10px 14px;
+  }
+  .dp-tabs {
+    margin-bottom: 8px;
+  }
+  .dp-board {
+    font-size: 14px;
+  }
+  .dp-board td {
+    padding: 3px 6px;
+  }
+  .dp-board-body {
+    min-height: 17em;
+  }
+  .dp-board-msg {
+    min-height: 14em;
+  }
+  .dp-win-body {
+    gap: 10px;
+  }
+  .dp-post {
+    gap: 6px;
+    padding: 8px 12px;
+  }
+  .dp-post-label {
+    font-size: 14px;
+  }
+  .dp-post-head {
+    font-size: 18px;
+  }
+  .dp-name-input {
+    padding: 5px 8px;
+    font-size: 19px;
+  }
+}
+
+/* A narrow window: the board's columns close up so all five fit. */
+@media (max-width: 440px) {
+  .dp-board-panel {
+    padding: 12px 10px;
+  }
+  .dp-board th,
+  .dp-board td {
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+  .dp-tabs .dp-btn {
+    font-size: 13px;
+  }
+}
+
+/* A phone on its side: the post box beside the stats, so the name field shows without scrolling. */
+@media (max-height: 500px) and (min-width: 640px) {
+  .dp-win-body {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 24px;
+  }
+  .dp-post {
+    width: min(420px, 56vw);
   }
 }

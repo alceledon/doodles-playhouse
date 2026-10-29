@@ -13,6 +13,8 @@
 //   ?tick=timer          drive requestAnimationFrame from setTimeout (automated tests in a
 //                        browser pane that isn't painting, where rAF never fires)
 //   ?input=touch         start in touch (or desktop) input mode instead of detecting it
+//   ?board=fake          a pretend leaderboard kept in this browser (src/leaderboard/fake.js);
+//                        posting works with it even in a dev run
 
 import * as THREE from 'three';
 import { createBus, EVENTS } from './core/events.js';
@@ -21,12 +23,16 @@ import { createRng, randomSeed } from './core/rng.js';
 import { DIFFICULTIES, SETTINGS_DEFAULTS } from './core/contracts.js';
 import { INPUT_MODES, getInputMode, needsRotate, startInputModeWatcher } from './core/device.js';
 import { REAL_AREAS } from './areas.js';
+import { createLeaderboard } from './leaderboard/client.js';
+import { createFakeLeaderboard } from './leaderboard/fake.js';
 
 const params = new URLSearchParams(location.search);
 const DEBUG = params.has('debug');
 const listParam = (name) => new Set((params.get(name) ?? '').split(',').filter(Boolean));
 const forcedReal = listParam('real');
 const forcedStubs = listParam('stub');
+// Dev and test runs read the online leaderboard but never post to it.
+const DEV_RUN = ['debug', 'seed', 'real', 'stub', 'tick'].some((p) => params.has(p));
 
 if (params.get('tick') === 'timer') {
   // Patched before boot, so every rAF user (this loop, cutscenes, UI) gets it.
@@ -115,6 +121,7 @@ document.addEventListener('gesturestart', (e) => e.preventDefault());
 
 let mods = {};
 let ui = null;
+let leaderboard = null;
 let audio = null;
 let cutscenes = null;
 /** Per-run objects, null between runs. */
@@ -301,14 +308,28 @@ addEventListener('unhandledrejection', (e) => showFatal(e.reason?.message ?? Str
 // Boot
 // ---------------------------------------------------------------------------
 
+/** The online board (off until src/leaderboard/config.js names a project), or ?board=fake's. */
+function makeLeaderboard() {
+  if (params.get('board') === 'fake') {
+    let storage = null;
+    try {
+      storage = localStorage;
+    } catch {} // blocked storage (private mode, sandboxed frame): memory only
+    return createFakeLeaderboard({ storage });
+  }
+  return createLeaderboard({ allowSubmit: !DEV_RUN });
+}
+
 async function boot() {
   const names = Object.keys(AREAS);
   const loaded = await Promise.all(names.map(loadArea));
   mods = Object.fromEntries(names.map((n, k) => [n, loaded[k].mod]));
-  moduleInfo = 'modules: ' + names.map((n, k) => `${n}=${loaded[k].real ? 'real' : 'stub'}`).join(' ');
+  leaderboard = makeLeaderboard();
+  const boardInfo = params.get('board') === 'fake' ? 'fake' : !leaderboard.enabled ? 'off' : leaderboard.canSubmit ? 'online' : 'online, read-only';
+  moduleInfo = 'modules: ' + names.map((n, k) => `${n}=${loaded[k].real ? 'real' : 'stub'}`).join(' ') + `  board: ${boardInfo}`;
   console.info(`[doodle] ${moduleInfo}`);
 
-  ui = mods.ui.createUI({ root: uiRoot, bus });
+  ui = mods.ui.createUI({ root: uiRoot, bus, leaderboard });
   audio = mods.audio.createAudio({ bus, camera });
   cutscenes = mods.ui.createCutscenes({ camera, getScene: () => scene, ui, bus });
   applySettings({ ...SETTINGS_DEFAULTS, ...ui.settings });
@@ -317,7 +338,7 @@ async function boot() {
 
   if (DEBUG) {
     window.__game = {
-      THREE, bus, state, camera, renderer, mods,
+      THREE, bus, state, camera, renderer, mods, leaderboard,
       get scene() { return scene; },
       get world() { return run?.world ?? null; },
       get gameplay() { return run?.gameplay ?? null; },

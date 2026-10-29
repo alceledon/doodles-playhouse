@@ -1,7 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DIFFICULTIES, ITEM_IDS, LOCK_IDS, MAX_DAYS, ROUTES } from '../../src/core/contracts.js';
-import { DIFFICULTY_INFO, EXIT_MESSAGES, HOW_TO_PLAY, ITEM_NAMES, LOCK_MESSAGES, ROUTE_TEXT, daysLeftText, formatTime, itemName, pauseHint, promptFor } from '../../src/ui/text.js';
+import {
+  BOARD_TEXT,
+  DIFFICULTY_INFO,
+  EXIT_MESSAGES,
+  HOW_TO_PLAY,
+  ITEM_NAMES,
+  LOCK_MESSAGES,
+  ROUTE_SHORT,
+  ROUTE_TEXT,
+  daysLeftText,
+  formatTime,
+  formatTimeTenths,
+  itemName,
+  pauseHint,
+  placeText,
+  promptFor,
+} from '../../src/ui/text.js';
 import { GLYPHS, missingGlyphs, textWidth } from '../../src/ui/glyphs.js';
 
 test('formatTime', () => {
@@ -13,6 +29,25 @@ test('formatTime', () => {
   assert.equal(formatTime(3600), '1:00:00');
   assert.equal(formatTime(3725), '1:02:05');
   for (const junk of [-5, NaN, undefined, null, Infinity, '30']) assert.equal(formatTime(junk), '0:00');
+});
+
+test('formatTimeTenths: board times floor to tenths', () => {
+  assert.equal(formatTimeTenths(312.45), '5:12.4');
+  assert.equal(formatTimeTenths(312.4), '5:12.4', 'a binary 312.39999… still reads .4');
+  assert.equal(formatTimeTenths(312.49), '5:12.4');
+  assert.equal(formatTimeTenths(60), '1:00.0');
+  assert.equal(formatTimeTenths(59.99), '0:59.9');
+  assert.equal(formatTimeTenths(0.04), '0:00.0');
+  assert.equal(formatTimeTenths(3725.25), '1:02:05.2');
+  for (const junk of [0, -5, NaN, undefined, null, Infinity, '30']) assert.equal(formatTimeTenths(junk), '0:00.0');
+});
+
+test('leaderboard words', () => {
+  assert.equal(placeText(3, 'Normal'), 'You’re #3 on Normal!');
+  assert.match(placeText(null, 'Hard'), /Hard/);
+  assert.doesNotMatch(placeText(null, 'Hard'), /#/);
+  assert.equal(BOARD_TEXT.columns.length, 5);
+  for (const r of Object.values(ROUTES)) assert.ok(ROUTE_SHORT[r], r);
 });
 
 test('days left on the day card', () => {
@@ -32,7 +67,7 @@ test('every difficulty, item, lock and route has its text', () => {
 });
 
 test('every crayon string can be drawn with the stroke font', () => {
-  const strings = ["DOODLE'S\nPLAYHOUSE", 'SETTINGS', 'HOW TO PLAY', 'PAUSED', 'YOU ESCAPED!', 'DOODLE HAS A\nNEW CHEW TOY.'];
+  const strings = ["DOODLE'S\nPLAYHOUSE", 'SETTINGS', 'HOW TO PLAY', 'LEADERBOARD', 'PAUSED', 'YOU ESCAPED!', 'DOODLE HAS A\nNEW CHEW TOY.'];
   for (let d = 1; d <= MAX_DAYS; d++) strings.push(`DAY ${d}`);
   for (const s of strings) assert.deepEqual(missingGlyphs(s.replace(/\n/g, '')), [], s);
 });

@@ -62,6 +62,20 @@ export function createInputModeState(initial = INPUT_MODES.DESKTOP) {
   };
 }
 
+const NOT_TEXT = new Set(['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit']);
+
+/**
+ * True for a key event's target that takes typing (the leaderboard's name field):
+ * those keys are words, not game keys, and not a sign of a real keyboard either.
+ */
+export function isTextEntry(target) {
+  if (!target || typeof target !== 'object') return false;
+  if (target.isContentEditable) return true;
+  const tag = String(target.tagName ?? '').toUpperCase();
+  if (tag === 'TEXTAREA') return true;
+  return tag === 'INPUT' && !NOT_TEXT.has(String(target.type || 'text').toLowerCase());
+}
+
 /** Phones play sideways: a narrow portrait screen in touch mode gets the rotate overlay. */
 export function needsRotate({ width, height, touch }) {
   return !!touch && height > width && width < PHONE_MAX_WIDTH;
@@ -101,7 +115,10 @@ export function startInputModeWatcher({ bus, forced = null }) {
     changed(state.noteMouseMove(performance.now(), moved ? 1 : 0, 0));
   };
   const onTouch = () => changed(state.noteTouch(performance.now()));
-  const onKey = () => changed(state.noteKey());
+  // iOS's on-screen keyboard sends key events too: typing a name doesn't mean a keyboard is attached.
+  const onKey = (e) => {
+    if (!isTextEntry(e?.target)) changed(state.noteKey());
+  };
   addEventListener('pointerdown', onPointer, true);
   addEventListener('pointermove', onPointer, true);
   addEventListener('touchstart', onTouch, { capture: true, passive: true });

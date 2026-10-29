@@ -18,7 +18,7 @@ Read those three files first; they're the source of truth. This document explain
 
 | Owner | Owns (creates and edits only these) |
 |---|---|
-| **Coordinator** | `index.html`, `style.css`, `package.json`, `README.md`, `CLAUDE.md`, `.nojekyll`, `.gitignore`, `.claude/`, `tools/`, `vendor/`, `src/main.js`, `src/areas.js`, `src/core/**`, `tests/core/**`, `docs/**`, `dev/template.html` |
+| **Coordinator** | `index.html`, `style.css`, `package.json`, `README.md`, `CLAUDE.md`, `.nojekyll`, `.gitignore`, `.claude/`, `tools/`, `vendor/`, `src/main.js`, `src/areas.js`, `src/core/**`, `src/leaderboard/**`, `firestore.rules`, `tests/core/**`, `tests/leaderboard/**`, `docs/**`, `dev/template.html` |
 | **World** | `src/world/**`, `dev/world.html`, `tests/world/**` |
 | **Doodle** | `src/doodle/**`, `dev/doodle.html`, `tests/doodle/**` |
 | **Gameplay** | `src/player/**`, `src/gameplay/**`, `dev/gameplay.html`, `tests/gameplay/**` |
@@ -34,8 +34,9 @@ instead, so two branches never touch the same file.
 | World | `src/world/index.js` | `createWorld({ scene, bus, rng, difficulty }) → World` |
 | Gameplay | `src/gameplay/index.js` | `createGameplay({ scene, camera, canvas, world, bus, rng, difficulty, settings }) → Gameplay` |
 | Doodle | `src/doodle/index.js` | `createDoodle({ scene, world, bus, rng, difficulty }) → Doodle` |
-| Presentation | `src/ui/index.js` | `createUI({ root, bus }) → UI`, `createCutscenes({ camera, getScene, ui, bus }) → Cutscenes` |
+| Presentation | `src/ui/index.js` | `createUI({ root, bus, leaderboard }) → UI` (`leaderboard` optional), `createCutscenes({ camera, getScene, ui, bus }) → Cutscenes` |
 | Presentation | `src/audio/index.js` | `createAudio({ bus, camera }) → Audio` |
+| Coordinator | `src/leaderboard/client.js` | `createLeaderboard({ config, fetch, allowSubmit, timeoutMs }) → Leaderboard` (`fake.js`: `createFakeLeaderboard(...)`, the same shape) |
 
 - **Reference implementations:** each one has a working **stub** in `src/core/stubs/`, which shows
   the minimum behavior.
@@ -49,6 +50,15 @@ instead, so two branches never touch the same file.
 - **Long-lived objects:** UI, Cutscenes and Audio are created once and get the root bus.
 - **Randomness:** use the `rng` you're given, not `Math.random()`, for anything that affects a
   run, so a seed reproduces it. `rng.fork('label')` makes independent sub-streams.
+- **Leaderboard:** main.js builds one and hands it to `createUI` (see the `Leaderboard` typedef).
+  - It's the online board (Cloud Firestore over REST, `src/leaderboard/client.js`), or the fake
+    one with `?board=fake`.
+  - Until `src/leaderboard/config.js` names a Firebase project it's off (`enabled: false`), and
+    the UI shows nothing of it.
+  - Dev runs (`debug`, `seed`, `real`, `stub` or `tick` in the URL) read it but get
+    `canSubmit: false`.
+  - Entry rules live in `src/leaderboard/entries.js` and match `firestore.rules`. Failures
+    reject with an Error carrying a `kind`.
 
 ## Units and axes
 - Meters and seconds. Y is up.
@@ -141,7 +151,7 @@ title → createWorld/createGameplay/createDoodle → for each day:
   freeze → gameplay.startDay(day) → doodle.reset(kennel, {wakeDelay: 8}) → ui.showDayCard → cutscenes.playWake
   → DAY_START → unfreeze (controls on, doodle active)
 CAUGHT  → freeze → gameplay.onCaught() → playCatch → next day   (day 5: playGameOver → ui.showGameOver → title)
-ESCAPED → freeze → playEscape → ui.recordTime → ui.showWin → title
+ESCAPED → freeze → playEscape → ui.recordTime → ui.showWin (offers to post the time) → title
 PAUSE_REQUEST → freeze → ui.showPause → resume (unfreeze) | quit (title)
 ```
 - **Phones and tablets:** `src/core/device.js` decides the input mode (touch when the primary
