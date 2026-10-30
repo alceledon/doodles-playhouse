@@ -102,3 +102,26 @@ test('fake board: latency is real time', async () => {
   await lb.top('practice');
   assert.ok(Date.now() - t0 >= 25);
 });
+
+test('fake board: co-op boards are separate, seeded, and take two names', async () => {
+  const { createFakeLeaderboard: make } = await import('../../src/leaderboard/fake.js');
+  const lb = make({ latencyMs: 0 });
+  const shared = await lb.top('normal', 10, { coop: 'shared' });
+  assert.ok(shared.length > 0 && shared.every((e) => e.name2), 'seeded pairs');
+  const solo = await lb.top('normal');
+  assert.ok(solo.every((e) => !e.name2));
+  const r = await lb.submit({ name: 'AL', name2: 'BO', seconds: 61, days: 1, route: 'garage', difficulty: 'normal', coop: 'knockout' });
+  assert.equal(r.rank, 1);
+  assert.equal((await lb.top('normal', 1, { coop: 'knockout' }))[0].name2, 'BO');
+  assert.notEqual((await lb.top('normal', 1, { coop: 'shared' }))[0].name2, 'BO');
+  await assert.rejects(lb.submit({ name: 'AL', seconds: 61, days: 1, route: 'garage', difficulty: 'normal', coop: 'shared' }), (e) => e.kind === 'invalid');
+});
+
+test('fake board: a save from before co-op still loads its solo runs', async () => {
+  const { createFakeLeaderboard: make, FAKE_KEY: key } = await import('../../src/leaderboard/fake.js');
+  const store = new Map([[key, JSON.stringify({ next: 5, boards: { easy: [{ id: 'old1', name: 'OLD', seconds: 99, days: 1, route: 'garage', at: null }] } })]]);
+  const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
+  const lb = make({ storage, latencyMs: 0 });
+  assert.deepEqual((await lb.top('easy')).map((e) => e.name), ['OLD']);
+  assert.ok((await lb.top('easy', 10, { coop: 'shared' })).length > 0);
+});

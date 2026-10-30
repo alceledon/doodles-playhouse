@@ -2,7 +2,8 @@
 // (no Firebase SDK, no dependencies). Pure: no DOM and no `three`, so node tests
 // it with a fake fetch.
 //
-// One collection per difficulty (entries.js#BOARDS). firestore.rules lets anyone
+// One collection per difficulty (entries.js#BOARDS), and per co-op rule and
+// difficulty for two-player runs (COOP_BOARDS). firestore.rules lets anyone
 // read and add runs, never change or delete them; entries.js mirrors those rules,
 // so nothing invalid is ever sent.
 //
@@ -57,12 +58,13 @@ const decodeString = (v) => (typeof v?.stringValue === 'string' ? v.stringValue 
 /** 'projects/p/databases/(default)/documents/runs_normal/abc123' → 'abc123' */
 const docId = (doc) => (typeof doc?.name === 'string' ? doc.name.split('/').pop() : '');
 
-/** A Firestore document → Entry {id, name, seconds, days, route, at}. `at` is the createTime (ISO string). */
+/** A Firestore document → Entry {id, name, name2?, seconds, days, route, at}. `at` is the createTime (ISO string). */
 export function decodeEntry(doc) {
   const f = doc?.fields ?? {};
   return {
     id: docId(doc),
     name: decodeString(f.name),
+    ...(f.name2 && { name2: decodeString(f.name2) }),
     seconds: decodeNumber(f.seconds),
     days: decodeNumber(f.days),
     route: decodeString(f.route),
@@ -70,8 +72,9 @@ export function decodeEntry(doc) {
   };
 }
 
-const encodeEntry = ({ name, seconds, days, route }) => ({
+const encodeEntry = ({ name, name2, seconds, days, route }) => ({
   name: { stringValue: name },
+  ...(name2 !== undefined && { name2: { stringValue: name2 } }),
   seconds: { doubleValue: seconds },
   days: { integerValue: String(days) },
   route: { stringValue: route },
@@ -134,16 +137,17 @@ export function createLeaderboard({ config = FIREBASE, fetch: fetchFn = globalTh
     }
   }
 
-  function boardFor(difficulty) {
+  /** The collection for a difficulty, or for a co-op rule and difficulty. */
+  function boardFor(difficulty, coop = null) {
     if (!enabled) throw leaderboardError('disabled', MESSAGES.disabled);
-    const board = boardOf(difficulty);
+    const board = boardOf(difficulty, coop);
     if (!board) throw leaderboardError('invalid', MESSAGES.difficulty);
     return board;
   }
 
   /** The fastest `limit` runs on a difficulty's board, fastest first. */
-  async function top(difficulty, limit = 10) {
-    const board = boardFor(difficulty);
+  async function top(difficulty, limit = 10, { coop = null } = {}) {
+    const board = boardFor(difficulty, coop);
     const n = Math.max(1, Math.min(100, Math.floor(Number(limit)) || 10));
     const data = await post(':runQuery', {
       structuredQuery: {
@@ -158,8 +162,8 @@ export function createLeaderboard({ config = FIREBASE, fetch: fetchFn = globalTh
   }
 
   /** Where a time would place: 1 + the runs strictly faster (ties share a place). */
-  async function rankOf(difficulty, seconds) {
-    const board = boardFor(difficulty);
+  async function rankOf(difficulty, seconds, { coop = null } = {}) {
+    const board = boardFor(difficulty, coop);
     const s = roundSeconds(seconds); // compared at the precision times are stored with
     if (typeof s !== 'number' || !Number.isFinite(s)) throw leaderboardError('invalid', timeProblem(s));
     const data = await post(':runAggregationQuery', {
@@ -182,19 +186,19 @@ export function createLeaderboard({ config = FIREBASE, fetch: fetchFn = globalTh
    * @returns {Promise<{id: string, rank: number|null, entry: Object}>}  rank is null when the run
    *   was posted but its place couldn't be fetched (never post again in that case: it's on the board).
    */
-  async function submit({ name, seconds, days, route, difficulty } = {}) {
+  async function submit({ name, name2, seconds, days, route, difficulty, coop = null } = {}) {
     if (!enabled) throw leaderboardError('disabled', MESSAGES.disabled);
     if (!canSubmit) throw leaderboardError('disabled', MESSAGES.readOnly);
-    const board = boardFor(difficulty);
-    const entry = { name, seconds: roundSeconds(seconds), days, route };
-    const problem = entryProblem(entry);
+    const board = boardFor(difficulty, coop);
+    const entry = coop == null ? { name, seconds: roundSeconds(seconds), days, route } : { name, name2, seconds: roundSeconds(seconds), days, route };
+    const problem = entryProblem(entry, { coop: coop != null });
     if (problem) throw leaderboardError('invalid', problem);
     const doc = await post(`/${board}`, { fields: encodeEntry(entry) });
     const id = docId(doc);
     if (!id) throw leaderboardError('server', MESSAGES.server, { detail: 'no document name' });
     let rank = null;
     try {
-      rank = await rankOf(difficulty, entry.seconds);
+      rank = await rankOf(difficulty, entry.seconds, { coop });
     } catch {
       // Posted, place unknown: the UI says so rather than offering a second post.
     }

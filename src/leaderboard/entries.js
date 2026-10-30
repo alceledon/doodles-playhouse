@@ -2,7 +2,7 @@
 // win screen. Pure (node tests it). firestore.rules enforces the same limits on
 // the server, so a run that passes entryProblem() is one the rules will take.
 
-import { DIFFICULTIES, MAX_DAYS, ROUTES } from '../core/contracts.js';
+import { COOP_RULE_IDS, DIFFICULTIES, MAX_DAYS, ROUTES } from '../core/contracts.js';
 
 /** Runs faster than this don't go on the board (a minute: nobody escapes that fast legitimately). */
 export const MIN_SECONDS = 60;
@@ -18,8 +18,16 @@ const ROUTE_IDS = Object.values(ROUTES);
 /** One Firestore collection per difficulty, so ordering by seconds needs no composite index. */
 export const BOARDS = Object.freeze(Object.fromEntries(DIFFICULTIES.map((d) => [d, `runs_${d}`])));
 
-/** 'normal' → 'runs_normal'; null for an unknown difficulty. */
-export const boardOf = (difficulty) => (Object.hasOwn(BOARDS, difficulty) ? BOARDS[difficulty] : null);
+/** Co-op runs: one collection per catch rule and difficulty (coop_shared_normal, coop_knockout_hard...). */
+export const COOP_BOARDS = Object.freeze(Object.fromEntries(
+  COOP_RULE_IDS.map((rule) => [rule, Object.freeze(Object.fromEntries(DIFFICULTIES.map((d) => [d, `coop_${rule}_${d}`])))]),
+));
+
+/** 'normal' → 'runs_normal', ('normal', 'shared') → 'coop_shared_normal'; null for an unknown difficulty or rule. */
+export function boardOf(difficulty, coop = null) {
+  const boards = coop == null ? BOARDS : Object.hasOwn(COOP_BOARDS, coop) ? COOP_BOARDS[coop] : null;
+  return boards && Object.hasOwn(boards, difficulty) ? boards[difficulty] : null;
+}
 
 /** Times are stored to 2 decimals; numbers round, anything else passes through for timeProblem to reject. */
 export const roundSeconds = (seconds) => (typeof seconds === 'number' ? Math.round(seconds * 100) / 100 : seconds);
@@ -66,9 +74,12 @@ export function timeProblem(seconds) {
   return null;
 }
 
-/** Mirrors firestore.rules: null if the entry would be accepted, else the first problem. */
-export function entryProblem({ name, seconds, days, route } = {}) {
-  const bad = nameProblem(name) ?? timeProblem(seconds);
+/**
+ * Mirrors firestore.rules: null if the entry would be accepted, else the first problem.
+ * A co-op entry (coop: true) also needs the guest's name2.
+ */
+export function entryProblem({ name, name2, seconds, days, route } = {}, { coop = false } = {}) {
+  const bad = nameProblem(name) ?? (coop ? nameProblem(name2) : null) ?? timeProblem(seconds);
   if (bad) return bad;
   if (!Number.isInteger(days) || days < 1 || days > MAX_DAYS) return `Days used must be 1 to ${MAX_DAYS}.`;
   if (!ROUTE_IDS.includes(route)) return 'Unknown way out.';

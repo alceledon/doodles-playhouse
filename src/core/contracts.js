@@ -342,7 +342,8 @@ export const SETTINGS_DEFAULTS = Object.freeze({
  * @property {(seconds: number) => void} stun
  * @property {() => void} [dispose]
  * @property {{path: Vec3[], target: Vec3|null, senses: Object}} [debug]
- * @property {() => Object} [snapshot]          co-op host: {pos, yaw, pitch, pose, mood, carrying, speed, state, floorId, ...}, plain JSON
+ * @property {() => Object} [snapshot]          co-op host: {pos, yaw, pitch, pose, mood, carrying, speed, state, floorId, target, ...},
+ *   plain JSON; target = the hunted player's id or null
  * @property {(snap: Object) => void} [applySnapshot]   co-op guest (puppet): move toward it, interpolating
  * @property {(playerId: 'host'|'guest') => void} [releaseCatch]   knock-out: let go of a caught player
  *   (who is now down) and, after a short pause, hunt the other one
@@ -571,6 +572,7 @@ export function validateWorld(world, { requireMeshes = false } = {}) {
   if (!a) err('anchors missing');
   else {
     for (const k of ['startBed', 'kennel', 'kennelBed', 'fuseBox']) checkSpot(a[k], `anchors.${k}`);
+    if (a.startBed2 !== undefined) checkSpot(a.startBed2, 'anchors.startBed2');
     if (!Array.isArray(a.patrol) || a.patrol.length < 3) err('anchors.patrol needs at least 3 spots');
     else a.patrol.forEach((s) => checkSpot(s, 'anchors.patrol'));
     if (!a.spawns) err('anchors.spawns missing');

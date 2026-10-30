@@ -271,6 +271,28 @@ run against one Doodle.
 - **New events:** `PLAYER_DOWN`, `PLAYER_UP`, `PARTNER_JOINED`, `PARTNER_LEFT`, `NET_STATUS`
   (main.js emits these) and `KEYPAD_ROLLED` (Gameplay).
 
+### Run flow in co-op (main.js)
+- **Lobby:** `hostRoom`/`joinRoom`, then `ui.showLobby`. When the host presses Start it sends
+  `start {seed, difficulty, rule, names}`, and both sides call `playRun(difficulty, seed, coop)`.
+- **Host decides catches.**
+  - On `CAUGHT {playerId}` it sends `flow {step: 'caught', playerId, outcome: 'day'|'down'}`.
+  - The guest's main.js follows the message rather than its own bus.
+  - `down` (knock-out with the partner still up) means:
+    - `gameplay.setDown(id, true)`, plus `doodle.releaseCatch(id)` on the host.
+    - `PLAYER_DOWN`.
+    - The victim plays `playCatch({knockout: true})`, then its camera follows the partner's
+      pose each frame.
+  - `day` ends the day for both, like a solo catch.
+- **Escape:** on `ESCAPED {playerId}` the host sends `flow {step: 'escaped', route, seconds,
+  days}`, and both show the co-op win with the host's time.
+- **Every frame:**
+  - Both sides send `pose()`. The host also sends `doodle.snapshot()` and `gameplay.snapshot()`.
+  - Doodle gets `[player, remote]`.
+  - Online pause never freezes the world.
+- **Partner left:**
+  - The host carries on solo. A host that was spectating ends the day.
+  - The guest is shown "Your friend left" and goes back to the title.
+
 ### Testing co-op without a server
 1. Serve the game.
 2. Open `/?debug=1&net=local` in one tab and host from the title.

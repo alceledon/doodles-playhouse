@@ -133,12 +133,14 @@ export function createMiniHouse({ bus = null, onDoorChange = null, onContainerCh
       locked: spec.locked,
       collider: spec.collider,
       cells: cellsInBox(nav, spec.floorId, spec.cellBox),
-      setOpen(open, by = 'player') {
+      setOpen(open, by = 'player', { silent = false } = {}) {
         if (open === door.isOpen) return true;
         if (door.locked && open) return false;
         door.isOpen = open;
-        emit(open ? EVENTS.DOOR_OPENED : EVENTS.DOOR_CLOSED, { doorId: door.id, by });
-        emit(EVENTS.NOISE, { pos: door.pos, floorId: door.floorId, loudness: 5, kind: 'door' });
+        if (!silent) {
+          emit(open ? EVENTS.DOOR_OPENED : EVENTS.DOOR_CLOSED, { doorId: door.id, by });
+          emit(EVENTS.NOISE, { pos: door.pos, floorId: door.floorId, loudness: 5, kind: 'door' });
+        }
         onDoorChange?.(door);
         return true;
       },
@@ -154,12 +156,14 @@ export function createMiniHouse({ bus = null, onDoorChange = null, onContainerCh
     const c = {
       id, kind, floorId, pos, isOpen: false, locked,
       itemSpot: { id: `${id}.item`, floorId, pos: itemPos, containerId: id },
-      setOpen(open) {
+      setOpen(open, by = 'player', { silent = false } = {}) {
         if (open === c.isOpen) return true;
         if (c.locked && open) return false;
         c.isOpen = open;
-        emit(open ? EVENTS.CONTAINER_OPENED : EVENTS.CONTAINER_CLOSED, { containerId: c.id });
-        emit(EVENTS.NOISE, { pos: c.pos, floorId: c.floorId, loudness: 2.5, kind: 'container' });
+        if (!silent) {
+          emit(open ? EVENTS.CONTAINER_OPENED : EVENTS.CONTAINER_CLOSED, { containerId: c.id, by });
+          emit(EVENTS.NOISE, { pos: c.pos, floorId: c.floorId, loudness: 2.5, kind: 'container' });
+        }
         onContainerChange?.(c);
         return true;
       },

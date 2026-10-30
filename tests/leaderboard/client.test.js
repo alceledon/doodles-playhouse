@@ -243,3 +243,29 @@ test('no API key: the URL has no ?key=', async () => {
   await createLeaderboard({ config: { projectId: 'demo-proj', apiKey: '' }, fetch }).top('easy');
   assert.equal(calls[0].url, `${BASE}:runQuery`);
 });
+
+test('co-op: posts name2 to the rule\'s board, and top/rankOf read that board', async () => {
+  const { fetch, calls } = fakeFetch(
+    json({ name: `${DOC}/coop_knockout_hard/k1`, createTime: '2026-10-29T12:00:00Z' }),
+    countAnswer(0),
+    json([{ document: { name: `${DOC}/coop_knockout_hard/k1`, fields: { name: { stringValue: 'AL' }, name2: { stringValue: 'BO' }, seconds: { doubleValue: 300 }, days: { integerValue: '1' }, route: { stringValue: 'garage' } } } }]),
+  );
+  const lb = board(fetch);
+  const r = await lb.submit({ name: 'AL', name2: 'BO', seconds: 300, days: 1, route: 'garage', difficulty: 'hard', coop: 'knockout' });
+  assert.equal(r.rank, 1);
+  assert.equal(calls[0].url, `${BASE}/coop_knockout_hard?key=KEY123`);
+  assert.deepEqual(calls[0].body.fields.name2, { stringValue: 'BO' });
+  assert.equal(calls[1].body.structuredAggregationQuery.structuredQuery.from[0].collectionId, 'coop_knockout_hard');
+  const top = await lb.top('hard', 10, { coop: 'knockout' });
+  assert.equal(calls[2].body.structuredQuery.from[0].collectionId, 'coop_knockout_hard');
+  assert.equal(top[0].name2, 'BO');
+});
+
+test('co-op: a missing or bad name2 is refused before anything is sent; unknown rules too', async () => {
+  const { fetch, calls } = fakeFetch();
+  const lb = board(fetch);
+  await rejectsWith(lb.submit({ name: 'AL', seconds: 300, days: 1, route: 'garage', difficulty: 'hard', coop: 'shared' }), 'invalid');
+  await rejectsWith(lb.submit({ name: 'AL', name2: 'b o', seconds: 300, days: 1, route: 'garage', difficulty: 'hard', coop: 'shared' }), 'invalid');
+  await rejectsWith(lb.top('hard', 10, { coop: 'everyone' }), 'invalid');
+  assert.equal(calls.length, 0);
+});

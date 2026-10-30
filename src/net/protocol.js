@@ -47,9 +47,9 @@ export const FORWARDED = Object.freeze({
 });
 
 /**
- * Should this local event go to the partner? Never a replay (that would echo forever), and only
- * the local player's own: on the host, events about the guest (playerId 'guest') are the guest's
- * already. Positions are plain objects already, so the payload goes as is.
+ * Should this local event go to the partner? Never a replay (that would echo forever). Events the
+ * host's rules emit about the guest (playerId 'guest': its pickups, traps, unlocks) do go: the
+ * guest's game never makes those itself. Positions are plain objects already.
  * @param {'host'|'guest'} role
  */
 export function shouldForward(role, type, payload) {

@@ -1,27 +1,46 @@
 rules_version = '2';
 
 // Doodle's Playhouse leaderboard. Paste this into Firebase console → Firestore Database → Rules.
-// One collection per difficulty (runs_practice, runs_easy, runs_normal, runs_hard), so the
-// "order by seconds" query needs no composite index. Anyone may read and add a run; nobody may
-// change or delete one (do that yourself in the console). The checks mirror
+// One collection per difficulty (runs_practice, runs_easy, runs_normal, runs_hard), and for
+// two-player co-op one per catch rule and difficulty (coop_shared_normal, coop_knockout_hard...),
+// so the "order by seconds" query needs no composite index. Anyone may read and add a run; nobody
+// may change or delete one (do that yourself in the console). The checks mirror
 // src/leaderboard/entries.js, so a hand-made request can't post a malformed or impossible run.
 service cloud.firestore {
   match /databases/{database}/documents {
+    function soloBoard(board) {
+      return board in ['runs_practice', 'runs_easy', 'runs_normal', 'runs_hard'];
+    }
+    function coopBoard(board) {
+      return board in ['coop_shared_practice', 'coop_shared_easy', 'coop_shared_normal', 'coop_shared_hard',
+                       'coop_knockout_practice', 'coop_knockout_easy', 'coop_knockout_normal', 'coop_knockout_hard'];
+    }
+    function goodName(name) {
+      return name is string && name.matches('^[A-Z0-9]{1,6}$');
+    }
+    function goodRun(d) {
+      return goodName(d.name)
+        && d.seconds is number
+        && d.seconds >= 60
+        && d.seconds < 86400
+        && d.days is int
+        && d.days >= 1
+        && d.days <= 5
+        && d.route in ['frontDoor', 'garage']
+        && d.v == 1;
+    }
+
     match /{board}/{runId} {
-      allow read: if board in ['runs_practice', 'runs_easy', 'runs_normal', 'runs_hard'];
-      allow create: if board in ['runs_practice', 'runs_easy', 'runs_normal', 'runs_hard']
-        && request.resource.data.keys().hasOnly(['name', 'seconds', 'days', 'route', 'v'])
-        && request.resource.data.keys().hasAll(['name', 'seconds', 'days', 'route', 'v'])
-        && request.resource.data.name is string
-        && request.resource.data.name.matches('^[A-Z0-9]{1,6}$')
-        && request.resource.data.seconds is number
-        && request.resource.data.seconds >= 60
-        && request.resource.data.seconds < 86400
-        && request.resource.data.days is int
-        && request.resource.data.days >= 1
-        && request.resource.data.days <= 5
-        && request.resource.data.route in ['frontDoor', 'garage']
-        && request.resource.data.v == 1;
+      allow read: if soloBoard(board) || coopBoard(board);
+      allow create: if (soloBoard(board)
+          && request.resource.data.keys().hasOnly(['name', 'seconds', 'days', 'route', 'v'])
+          && request.resource.data.keys().hasAll(['name', 'seconds', 'days', 'route', 'v'])
+          && goodRun(request.resource.data))
+        || (coopBoard(board)
+          && request.resource.data.keys().hasOnly(['name', 'name2', 'seconds', 'days', 'route', 'v'])
+          && request.resource.data.keys().hasAll(['name', 'name2', 'seconds', 'days', 'route', 'v'])
+          && goodRun(request.resource.data)
+          && goodName(request.resource.data.name2));
       allow update, delete: if false;
     }
   }

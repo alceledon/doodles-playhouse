@@ -214,6 +214,31 @@ On phones and tablets (Granny's mobile scheme; see `src/gameplay/README.md`):
     board's top 10. After an escape of a minute or more you can post your time under a name
     of up to 6 letters or numbers; dev and test runs can't post.
 
+## Co-op (two players online)
+- **Hosting and joining:**
+  - "Play with a friend" on the title screen.
+  - The host picks a name, the difficulty and a catch rule, then shares an invite link
+    (`?join=CODE`) or the 6-letter code.
+  - The friend joins with a name, and the host presses Start.
+- **One run for both:**
+  - The same house, items and code.
+  - One Doodle, which hunts whichever player it senses best.
+  - Each player has their own hand.
+- **The guest** wakes at the foot of the top bunk's ladder.
+- **Catch rules:**
+  - **Shared:** any catch ends the day for both.
+  - **Knock-out:**
+    - The caught player drops their item and watches through the partner's eyes.
+    - Doodle stands over them for a few seconds, then goes after the other player.
+    - The day ends when both are caught. If the partner escapes, both win.
+- **Either player escaping** wins the run for both.
+- **Pause** doesn't stop an online game. It only takes your own controls away.
+- **A partner who leaves:**
+  - If the guest leaves, the host plays on alone.
+  - If the host leaves, the run ends for the guest.
+- **Leaderboard:** co-op times go on their own boards, one per rule and difficulty, and show
+  both names. Only the host posts.
+
 ## Rendering budget
 - **Materials and fog:** Lambert materials and fog. No shadows.
 - **Lights:** a fixed pool of ~6 point lights, moved to the nearest lamps every ~0.5 s. That

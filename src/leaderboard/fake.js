@@ -4,9 +4,9 @@
 // none is empty. It applies the same checks as the real one, so the UI meets the
 // same errors; failNext() makes the next call fail on purpose.
 
-import { DIFFICULTIES } from '../core/contracts.js';
+import { COOP_RULE_IDS, DIFFICULTIES } from '../core/contracts.js';
 import { MESSAGES, leaderboardError } from './client.js';
-import { boardOf, entryProblem, roundSeconds, timeProblem } from './entries.js';
+import { BOARDS, COOP_BOARDS, boardOf, entryProblem, roundSeconds, timeProblem } from './entries.js';
 
 export const FAKE_KEY = 'doodles-playhouse.fakeBoard.v1';
 
@@ -18,30 +18,41 @@ const SEED = {
   hard: [['GHOST', 701.3, 2, 'garage'], ['WREN', 866, 3, 'frontDoor'], ['FINN', 1012.8, 4, 'garage'], ['ELLA', 1240.5, 5, 'frontDoor']],
 };
 
+// Co-op boards get the same runs, paired up and a bit faster (two pairs of eyes).
+const PARTNERS = ['DOT', 'JAY', 'EVE', 'LEO', 'AMY', 'NED'];
+
+/** Every board, keyed by its collection id (runs_normal, coop_shared_normal...). */
 function seeded() {
   let n = 0;
   const boards = {};
+  const at = () => new Date(Date.UTC(2026, 9, 1 + ((n++ * 3) % 27), 19, 30)).toISOString();
   for (const d of DIFFICULTIES) {
-    boards[d] = SEED[d].map(([name, seconds, days, route], k) => ({
-      id: `seed-${d}-${k}`,
-      name,
-      seconds,
-      days,
-      route,
-      at: new Date(Date.UTC(2026, 9, 1 + ((n++ * 3) % 27), 19, 30)).toISOString(),
-    }));
+    boards[BOARDS[d]] = SEED[d].map(([name, seconds, days, route], k) => ({ id: `seed-${d}-${k}`, name, seconds, days, route, at: at() }));
+    for (const rule of COOP_RULE_IDS) {
+      boards[COOP_BOARDS[rule][d]] = SEED[d].slice(0, 4).map(([name, seconds, days, route], k) => ({
+        id: `seed-${rule}-${d}-${k}`, name, name2: PARTNERS[k], seconds: roundSeconds(seconds * (rule === 'shared' ? 0.85 : 0.75)), days, route, at: at(),
+      }));
+    }
   }
   return { next: 1, boards };
 }
 
-const validEntry = (e) => e && typeof e.id === 'string' && !entryProblem(e);
+const COLLECTIONS = [...Object.values(BOARDS), ...COOP_RULE_IDS.flatMap((r) => Object.values(COOP_BOARDS[r]))];
+const isCoopBoard = (id) => id.startsWith('coop_');
+const validEntry = (board) => (e) => e && typeof e.id === 'string' && !entryProblem(e, { coop: isCoopBoard(board) });
 
 function load(storage) {
   try {
     const raw = JSON.parse(storage?.getItem(FAKE_KEY) ?? 'null');
     if (!raw || typeof raw !== 'object' || !raw.boards) return null;
+    const fresh = seeded().boards;
     const boards = {};
-    for (const d of DIFFICULTIES) boards[d] = Array.isArray(raw.boards[d]) ? raw.boards[d].filter(validEntry) : [];
+    for (const id of COLLECTIONS) {
+      // Saved before co-op, boards were keyed by difficulty; co-op boards missing from a save start seeded.
+      const old = DIFFICULTIES.find((d) => BOARDS[d] === id);
+      const list = raw.boards[id] ?? (old && raw.boards[old]);
+      boards[id] = Array.isArray(list) ? list.filter(validEntry(id)) : fresh[id];
+    }
     return { next: Number.isInteger(raw.next) && raw.next > 0 ? raw.next : 1, boards };
   } catch {
     return null; // missing, junk or blocked storage: start from the seed
@@ -73,9 +84,10 @@ export function createFakeLeaderboard({ storage = null, allowSubmit = true, late
     if (kind) throw leaderboardError(kind, MESSAGES[kind] ?? MESSAGES.server, { status: kind === 'rejected' ? 403 : kind === 'server' ? 500 : null });
   }
 
-  function boardFor(difficulty) {
-    if (!boardOf(difficulty)) throw leaderboardError('invalid', MESSAGES.difficulty);
-    return data.boards[difficulty];
+  function boardFor(difficulty, coop = null) {
+    const id = boardOf(difficulty, coop);
+    if (!id) throw leaderboardError('invalid', MESSAGES.difficulty);
+    return (data.boards[id] ??= []);
   }
 
   const ahead = (list, seconds) => list.filter((e) => e.seconds < seconds).length;
@@ -85,26 +97,26 @@ export function createFakeLeaderboard({ storage = null, allowSubmit = true, late
     /** Writable: set it false from the console (?debug=1: __game.leaderboard) to see the "test run" note. */
     canSubmit: !!allowSubmit,
 
-    async top(difficulty, limit = 10) {
-      const list = boardFor(difficulty);
+    async top(difficulty, limit = 10, { coop = null } = {}) {
+      const list = boardFor(difficulty, coop);
       await roundTrip();
       const n = Math.max(1, Math.min(100, Math.floor(Number(limit)) || 10));
       return [...list].sort(byTime).slice(0, n).map((e) => ({ ...e }));
     },
 
-    async rankOf(difficulty, seconds) {
-      const list = boardFor(difficulty);
+    async rankOf(difficulty, seconds, { coop = null } = {}) {
+      const list = boardFor(difficulty, coop);
       const s = roundSeconds(seconds);
       if (typeof s !== 'number' || !Number.isFinite(s)) throw leaderboardError('invalid', timeProblem(s));
       await roundTrip();
       return ahead(list, s) + 1;
     },
 
-    async submit({ name, seconds, days, route, difficulty } = {}) {
+    async submit({ name, name2, seconds, days, route, difficulty, coop = null } = {}) {
       if (!board.canSubmit) throw leaderboardError('disabled', MESSAGES.readOnly);
-      const list = boardFor(difficulty);
-      const entry = { name, seconds: roundSeconds(seconds), days, route };
-      const problem = entryProblem(entry);
+      const list = boardFor(difficulty, coop);
+      const entry = coop == null ? { name, seconds: roundSeconds(seconds), days, route } : { name, name2, seconds: roundSeconds(seconds), days, route };
+      const problem = entryProblem(entry, { coop: coop != null });
       if (problem) throw leaderboardError('invalid', problem);
       await roundTrip();
       const posted = { id: `fake-${data.next++}`, ...entry, at: new Date().toISOString() };
