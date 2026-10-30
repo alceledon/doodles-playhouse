@@ -69,6 +69,9 @@ export const LINKS = [
 /** Anchors that aren't produced by a prop (prop-owned ones — keypad, opener, fuse box, hide spots — come from their builders). */
 export const ANCHORS = {
   startBed: { floorId: 'upstairs', x: 1.6, y: 0, z: 10.4, rotY: FACE.E }, // beside the bottom bunk, facing into the room
+  // Co-op guest: at the foot of the top bunk's ladder. The player controller only stands on
+  // floors and ramps (heightAt), so feet on the mattress would drop into the bunk's collider.
+  startBed2: { floorId: 'upstairs', x: 1.6, y: 0, z: 11.3, rotY: FACE.E },
   kennel: { floorId: 'basement', x: 12.5, y: 0, z: 15.5, rotY: FACE.N }, // Doodle sleeps on its chewed bed
   kennelBed: { floorId: 'basement', x: 12.85, y: 0.12, z: 15.85 }, // where it drops the ball
   frontDoor: {

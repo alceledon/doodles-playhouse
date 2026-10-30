@@ -123,18 +123,33 @@ floor's surface**; build.js adds the floor height.
   - Is the same on every difficulty (see Tuning).
 - **`colliders(floorId)`:** cached, and rebuilt only when a door on that floor changes. Don't
   mutate the array.
-- **Doors:**
-  - `setOpen` follows the fixture: it returns false if locked, and is a no-op if already in
-    that state.
-  - It emits `DOOR_OPENED` / `DOOR_CLOSED` plus `NOISE` (`kind: 'door'`). Loudness is 5, or 8
-    for the garage roll-up.
+- **Doors:** `setOpen(open, by = 'player', { silent } = {})`.
+  - It follows the fixture: it returns false if locked, and is a no-op if already in that
+    state.
+  - It emits `DOOR_OPENED` / `DOOR_CLOSED` (`{doorId, by}`, with `by` one of `'player'`,
+    `'doodle'`, `'remote'`) plus `NOISE` (`kind: 'door'`). Loudness is 5, or 8 for the garage
+    roll-up.
+  - **`silent: true`** (co-op guest applying the host's snapshot): `isOpen`, the colliders and
+    the leaf animation all change, but neither event nor `NOISE` is emitted. The lock and the
+    no-op still apply.
   - The front door and garage door start locked.
   - Doors close even if someone stands in the doorway, so Gameplay should push the player out.
-- **Containers:**
+- **Containers:** `setOpen(open, by = 'player', { silent } = {})`, with the same lock, no-op
+  and `silent` rules as doors.
+  - `CONTAINER_OPENED` / `CONTAINER_CLOSED` carry `{containerId, by}`, plus a `NOISE`
+    (`kind: 'container'`, loudness 2.5).
   - The item spot lies inside the container's collider in **both** states: just behind a
     drawer's front panel, on a cabinet's floor, in a chest. Items stay put while the moving
     part animates around them.
   - Only `atticChest` starts locked.
+- **Wake spots:**
+  - `anchors.startBed` is the floor beside the bottom bunk, facing east into the Kids' Bedroom.
+  - `anchors.startBed2` (co-op guest) is the floor at the foot of the top bunk's ladder,
+    0.9 m south of `startBed`, facing the same way.
+  - **It's a floor spot, not the top mattress.** The player controller stands only on what
+    `heightAt` reports (floors and stair ramps), and the bunk is one solid 1.7 m collider. Feet
+    on the mattress would drop straight into it and stick. Making the top bunk walkable would
+    change `heightAt` for items, the ball and the Doodle too, so solo play wouldn't stay the same.
 - **Spot heights:**
   - `Spot.pos.y` for items is the surface they rest on: the floor, a table top or a shelf.
   - Wall spots (drawings, keypad, padlock, plank, fuse box, opener) sit on the wall surface,

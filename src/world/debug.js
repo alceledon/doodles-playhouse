@@ -5,7 +5,7 @@
 // crawl space. Anchor colours: yellow spawns (orange inside a container),
 // green hide spots (with a line to the hidden eye), red traps (white = creaky),
 // magenta drawings, blue patrol, white lamps, cyan link paths, pink start bed,
-// brown kennel, red exits.
+// lilac co-op start bed, brown kennel, red exits.
 
 import * as THREE from 'three';
 import { NAV } from '../core/navgrid.js';
@@ -75,6 +75,7 @@ function anchorOverlay(world) {
   for (const l of a.lamps) marker(l.pos, 0xffffff, 0.14);
   for (const l of world.nav.links) for (let i = 1; i < l.points.length; i++) line(l.points[i - 1], l.points[i], l.kind === 'stairs' ? 0x40e0ff : l.kind === 'slide' ? 0xffd040 : 0xff40ff);
   marker(a.startBed.pos, 0xff80c0, 0.3, 0.05);
+  if (a.startBed2) marker(a.startBed2.pos, 0xc080ff, 0.3, 0.05);
   marker(a.kennel.pos, 0x8a5a2a, 0.5, 0.05);
   marker(a.kennelBed.pos, 0xc08040, 0.15);
   marker(a.frontDoor.exit.pos, 0xff3030, 0.3, 2);
