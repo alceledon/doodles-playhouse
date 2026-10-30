@@ -67,15 +67,18 @@ export function createRules({ world, bus, rng, difficulty = 'normal', tuning = t
   const { anchors } = world;
   const localId = coop?.role === 'guest' ? 'guest' : 'host';
   const isGuest = localId === 'guest';
-  /** Payload fields naming the player an event is about: none for the local player of a solo run. */
-  const who = (pid = localId, pos = null) => (coop || pid !== localId ? { playerId: pid, ...(pos ? { pos: copy(pos) } : {}) } : {});
+  /**
+   * Payload fields naming the player an event is about, plus `at` (where it happened, e.g.
+   * {pos, floorId}) so the partner's game can place the sound. None for a solo run's player.
+   */
+  const who = (pid = localId, at = null) => (coop || pid !== localId ? { playerId: pid, ...at } : {});
   const pidOf = (player) => player?.id ?? localId;
 
   const items = createItems({ bus, tuning, placements: pickSpawns(world, rng.fork('spawns'), tuning.items), localId, tagAll: !!coop });
   const code = generateCode(rng.fork('keypad'));
   const keypad = createKeypad(code);
   const drawings = assignDigits(anchors.drawings, code, rng.fork('drawings'));
-  const locks = createLocks({ world, bus, tuning, who: (pid) => who(pid) });
+  const locks = createLocks({ world, bus, tuning, who: (pid, at) => who(pid ?? localId, at) });
   const traps = placeTraps(anchors.traps, rng.fork('traps'), tuning);
   const triggers = createTrapTriggers(traps.all, tuning);
   /** treatId → {treatId, pos, floorId}: dropped and not eaten yet */
@@ -83,6 +86,7 @@ export function createRules({ world, bus, rng, difficulty = 'normal', tuning = t
   let treatCount = 0;
   let ballId = null; // the last ball thrown: the one Doodle fetches
   let ballNoisy = false; // has this throw made its landing noise yet?
+  let ballBy = localId; // who threw it: its bounces and landing are their sounds
   /** Every body in play (set by the 3D layer): who's hiding where. */
   let bodies = () => [];
 
@@ -217,7 +221,7 @@ export function createRules({ world, bus, rng, difficulty = 'normal', tuning = t
 
   /** Use the held item on a lock; the item is used up if it fits. */
   function useItemOn(lockId, player) {
-    const result = locks.tryItem(lockId, heldId(player));
+    const result = locks.tryItem(lockId, heldId(player), pidOf(player));
     if (result === 'opened') items.consumeHeld(pidOf(player));
     return result;
   }
@@ -227,7 +231,7 @@ export function createRules({ world, bus, rng, difficulty = 'normal', tuning = t
       if (locks.isOpen(LOCKS.KEYPAD) || target.dial == null || !(target.dial >= 0 && target.dial < keypad.digits.length)) return null;
       const digit = keypad.roll(target.dial, dir);
       bus.emit(EVENTS.KEYPAD_ROLLED, { index: target.dial, digit, pos: copy(anchors.frontDoor.keypad.pos), ...who(pidOf(player)) });
-      if (keypad.matches()) locks.solveKeypad();
+      if (keypad.matches()) locks.solveKeypad(pidOf(player));
       return { action: 'dial', dial: target.dial };
     }
     if (locks.isOpen(target.id)) return null;
@@ -409,7 +413,7 @@ export function createRules({ world, bus, rng, difficulty = 'normal', tuning = t
     const dart = { id: `dart${++dartCount}`, origin: o, dir: copy(dir), range: Math.max(0.3, range - 0.3), traveled: 0, floorId, stopAt: null, hit: false };
     darts.push(dart);
     firing = dart;
-    bus.emit(EVENTS.DART_FIRED, { origin: copy(origin), dir: copy(dir), range, ...who(pid) });
+    bus.emit(EVENTS.DART_FIRED, { origin: copy(origin), dir: copy(dir), range, ...who(pid, { pos: copy(origin), floorId }) });
     firing = null;
     if (tuning.noise.dart > 0) bus.emit(EVENTS.NOISE, { pos: copy(origin), floorId, loudness: tuning.noise.dart, kind: 'dart', ...who(pid) });
     return true;
@@ -464,6 +468,7 @@ export function createRules({ world, bus, rng, difficulty = 'normal', tuning = t
     const inst = items.release('flying', pid);
     ballId = inst.id;
     ballNoisy = false;
+    ballBy = pid;
     if (flight) {
       const ball = createBall(flight.origin, flight.vel, floorId);
       inst.pos = { x: ball.pos.x, y: ball.pos.y - BALL_RADIUS, z: ball.pos.z };
@@ -479,7 +484,7 @@ export function createRules({ world, bus, rng, difficulty = 'normal', tuning = t
     if (speed < 1.2) return;
     const loudness = ballNoisy ? tuning.noise.ball * clamp(speed / 8, 0.15, 0.6) : tuning.noise.ball;
     ballNoisy = true;
-    bus.emit(EVENTS.NOISE, { pos: copy(pos), floorId, loudness, kind: 'ball' });
+    bus.emit(EVENTS.NOISE, { pos: copy(pos), floorId, loudness, kind: 'ball', ...who(ballBy) });
   }
 
   /** The ball came to rest: Doodle goes to fetch it from here. */
@@ -487,7 +492,7 @@ export function createRules({ world, bus, rng, difficulty = 'normal', tuning = t
     if (inst.where !== 'flying') return;
     if (!ballNoisy) ballImpact(pos, floorId, 99);
     items.place(inst, pos, floorId);
-    bus.emit(EVENTS.BALL_LANDED, { pos: copy(pos), floorId });
+    bus.emit(EVENTS.BALL_LANDED, { pos: copy(pos), floorId, ...who(ballBy) });
   }
 
   function updateFlights(dt) {
