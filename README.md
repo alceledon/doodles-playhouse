@@ -82,6 +82,10 @@ host presses Start. Both play the same run against one Doodle.
   the leaderboard, using plain `fetch` and `EventSource` (no SDK). The code is in `src/net/`, and
   the rules are in [database.rules.json](database.rules.json).
 - **Off by default.** Co-op is off until `src/net/config.js` has a `databaseURL`.
+- **Lag.** Measured on 2026-10-29 between two tabs on one desktop through the live database:
+  about 95–155 ms one way (half the ping round trip, including up to 50 ms of message batching
+  each way). A guest's pickup took about 200 ms from click to item in hand. Players far from
+  `us-central1` will see more.
 - **Free tier.** On the Spark (free) plan the database allows 100 simultaneous connections, which
   is 50 games at once, and 10 GB of downloads a month. A game uses roughly 25–35 MB an hour.
 - **Background tabs.** If the host's tab goes to the background, the game stalls for both players.

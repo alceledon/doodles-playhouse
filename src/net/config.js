@@ -5,5 +5,5 @@
 // The URL is public by design: database.rules.json decides what anyone may read
 // or write, not keeping this secret.
 export const NET = {
-  databaseURL: '',
+  databaseURL: 'https://doodles-playhouse-default-rtdb.firebaseio.com',
 };
