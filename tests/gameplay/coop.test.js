@@ -179,6 +179,49 @@ test('treat and dart ids are only made on the host', () => {
   assert.deepEqual(t.guest.rules.snapshot(), t.host.rules.snapshot());
 });
 
+test("locks the guest opens are the guest's, placed at the lock (solo payloads unchanged)", () => {
+  const t = pair();
+  const fd = t.host.world.anchors.frontDoor;
+  t.host.rules.locks.openLock('plank', 'host');
+  t.host.rules.locks.solveKeypad('host');
+  assert.deepEqual(t.host.of(EVENTS.LOCK_OPENED).at(-1), { lockId: 'keypad', playerId: 'host', pos: fd.keypad.pos, floorId: fd.keypad.floorId });
+  const key = t.reach(ITEMS.PADLOCK_KEY);
+  t.intent('primary', { kind: 'item', id: key.id });
+  t.intent('primary', { kind: 'lock', id: 'padlock' });
+  assert.deepEqual(t.host.of(EVENTS.LOCK_OPENED).at(-1), { lockId: 'padlock', playerId: 'guest', pos: fd.padlock.pos, floorId: fd.padlock.floorId });
+  const door = t.host.rules.locks.frontDoor();
+  assert.deepEqual(t.host.of(EVENTS.EXIT_UNLOCKED), [{ route: 'frontDoor', playerId: 'guest', pos: door.pos, floorId: door.floorId }]);
+  assert.equal(t.guest.of(EVENTS.LOCK_OPENED).length, 0, 'the guest hears it as a replay only');
+
+  // Solo: exactly as before.
+  const bus = createBus();
+  const seen = [];
+  for (const type of [EVENTS.LOCK_OPENED, EVENTS.EXIT_UNLOCKED, EVENTS.DART_FIRED]) bus.on(type, (p) => seen.push(p));
+  const solo = createRules({ world: createMiniHouse({ bus }), bus, rng: createRng(3) });
+  solo.locks.openLock('plank');
+  solo.locks.openLock('padlock');
+  solo.locks.solveKeypad();
+  assert.deepEqual(seen, [{ lockId: 'plank' }, { lockId: 'padlock' }, { lockId: 'keypad' }, { route: 'frontDoor' }]);
+});
+
+test("a guest's shot and throw carry who and where", () => {
+  const t = pair();
+  t.reach(ITEMS.LAUNCHER);
+  t.intent('primary', { kind: 'item', id: t.instOf(ITEMS.LAUNCHER).id });
+  const eye = { x: 3, y: 1, z: 3 };
+  t.intent('secondary', null, { eye, dir: { x: 0, y: 0, z: -1 }, range: 2, floorId: 'ground' });
+  const fired = t.host.of(EVENTS.DART_FIRED).at(-1);
+  assert.equal(fired.playerId, 'guest');
+  assert.deepEqual([fired.pos, fired.floorId], [eye, 'ground']);
+
+  const ball = t.reach(ITEMS.TENNIS_BALL);
+  t.intent('primary', { kind: 'item', id: ball.id });
+  t.intent('secondary', null, { pos: { x: 8.5, y: 0, z: 5.5 }, floorId: 'ground', eye: { x: 8.5, y: 1.1, z: 5.5 }, dir: { x: 0, y: 0, z: -1 } });
+  for (let k = 0; k < 400 && ball.where === 'flying'; k++) t.host.rules.update(1 / 60);
+  assert.equal(t.host.of(EVENTS.BALL_LANDED).at(-1).playerId, 'guest');
+  assert.ok(t.host.of(EVENTS.NOISE).filter((n) => n.kind === 'ball').every((n) => n.playerId === 'guest'));
+});
+
 test('applying a snapshot twice changes nothing and says nothing', () => {
   const t = pair();
   const ball = t.reach(ITEMS.TENNIS_BALL);

@@ -47,8 +47,9 @@ export function listWords(words) {
 }
 
 /**
- * @param {{world: import('../core/contracts.js').World, bus: import('../core/events.js').Bus, tuning: Object, who?: (playerId: string) => Object}} opts
- *   who: extra payload fields naming the player behind an escape or a Jeep start (co-op)
+ * @param {{world: import('../core/contracts.js').World, bus: import('../core/events.js').Bus, tuning: Object, who?: (playerId: string, at?: Object) => Object}} opts
+ *   who: extra payload fields naming the player behind an event, and (co-op) where it happened:
+ *   at = {pos, floorId}. Empty in a solo run, so solo payloads stay as they were.
  */
 export function createLocks({ world, bus, tuning, who = () => ({}) }) {
   const open = new Set();
@@ -62,10 +63,29 @@ export function createLocks({ world, bus, tuning, who = () => ({}) }) {
   const isOpen = (lockId) => open.has(lockId);
   const remaining = (route) => ROUTE_LOCKS[route].filter((l) => !open.has(l));
 
-  function openLock(lockId) {
+  /** Where a lock's hardware is, so co-op sounds can be placed: {pos, floorId}. */
+  function lockSpot(lockId) {
+    const spot = {
+      [LOCKS.PADLOCK]: anchors.frontDoor.padlock,
+      [LOCKS.PLANK]: anchors.frontDoor.plank,
+      [LOCKS.KEYPAD]: anchors.frontDoor.keypad,
+      [LOCKS.FUSE_BOX]: anchors.fuseBox,
+      [LOCKS.JEEP_KEY]: anchors.garage.jeep,
+      [LOCKS.JEEP_BATTERY]: anchors.garage.jeep,
+      [LOCKS.ATTIC_CHEST]: chest(),
+    }[lockId];
+    return spot ? { pos: copy(spot.pos), floorId: spot.floorId } : null;
+  }
+  /** An exit's door, for EXIT_UNLOCKED. */
+  function routeSpot(route) {
+    const door = route === ROUTES.GARAGE ? garageDoor() : frontDoor();
+    return door ? { pos: copy(door.pos), floorId: door.floorId } : null;
+  }
+
+  function openLock(lockId, playerId) {
     if (!LOCK_IDS.includes(lockId) || open.has(lockId)) return false;
     open.add(lockId);
-    bus.emit(EVENTS.LOCK_OPENED, { lockId });
+    bus.emit(EVENTS.LOCK_OPENED, { lockId, ...who(playerId, lockSpot(lockId)) });
     if (lockId === LOCKS.ATTIC_CHEST) {
       const c = chest();
       c?.setLocked(false);
@@ -76,7 +96,7 @@ export function createLocks({ world, bus, tuning, who = () => ({}) }) {
       unlockedRoutes.add(route);
       // The garage door itself is unlocked by the opener, not here.
       if (route === ROUTES.FRONT_DOOR) frontDoor()?.setLocked(false);
-      bus.emit(EVENTS.EXIT_UNLOCKED, { route });
+      bus.emit(EVENTS.EXIT_UNLOCKED, { route, ...who(playerId, routeSpot(route)) });
     }
     return true;
   }
@@ -85,17 +105,17 @@ export function createLocks({ world, bus, tuning, who = () => ({}) }) {
    * Use an item on a lock.
    * @returns {'opened'|'alreadyOpen'|'wrongItem'|'needsCode'}
    */
-  function tryItem(lockId, itemId) {
+  function tryItem(lockId, itemId, playerId) {
     if (open.has(lockId)) return 'alreadyOpen';
     const needs = LOCK_NEEDS[lockId];
     if (needs === null) return 'needsCode';
     if (!itemId || itemId !== needs) return 'wrongItem';
-    openLock(lockId);
+    openLock(lockId, playerId);
     return 'opened';
   }
 
   /** The keypad opens when its dials show the code (the caller checks that). */
-  const solveKeypad = () => openLock(LOCKS.KEYPAD);
+  const solveKeypad = (playerId) => openLock(LOCKS.KEYPAD, playerId);
 
   /** @returns {'noPower'|'opened'|'closed'|'blocked'} */
   function pressOpener() {
@@ -168,6 +188,7 @@ export function createLocks({ world, bus, tuning, who = () => ({}) }) {
     openFrontDoor,
     escape,
     openAll,
+    lockSpot,
     save,
     load,
     garagePowered: () => open.has(LOCKS.FUSE_BOX),

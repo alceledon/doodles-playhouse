@@ -162,7 +162,10 @@ nothing below happens, and no event carries a `playerId`.
 
 **Who does what.**
 - **Host:** runs every rule for both bodies: items and hands, locks, keypad, traps, treats, the
-  ball and darts, walking out. Events about a player carry `playerId` (and `PICKUP` a `pos`).
+  ball and darts, walking out. Events about a player carry `playerId` (and `PICKUP` a `pos`), so
+  the partner's game can place the sound. `LOCK_OPENED` gets the lock's hardware `{pos, floorId}`,
+  `EXIT_UNLOCKED` the exit door's, and `DART_FIRED` the shooter's eye. A ball's bounce `NOISE` and
+  `BALL_LANDED` are the thrower's.
 - **Guest:**
   - It builds the same run from the same seed: spawns, code, drawings and traps come from rng
     forks, so both initial snapshots are equal.
