@@ -10,6 +10,10 @@
 //   ─treat / ball─▶ DISTRACTED ─eaten / returned─▶ PATROL
 //   ─dart hit─▶ STUNNED ─stunTime─▶ INVESTIGATE (where the dart came from)
 //   ─within catchRange─▶ CATCH (until reset)
+//   CATCH ─releaseCatch (co-op knock-out)─▶ SEARCH, paused ─releasePause─▶ INVESTIGATE near the other player
+//
+// Co-op: update() takes one Player or several. What it knows about "the player"
+// is kept per player id (see person()), and it hunts one target at a time.
 
 import { EVENTS } from '../core/events.js';
 import { DOODLE_BODY, DOODLE_STATES as S, ITEMS } from '../core/contracts.js';
@@ -23,6 +27,12 @@ import { createScent } from './scent.js';
 
 const AWAKE_SMELL_EVERY = 0.25; // s between scent checks
 const DOOR_NOISE_MEMORY = 2; // s: door noises near a door it just opened are its own
+const FLOOR_COST = 6; // m a floor apart counts as, when ranking who's nearest
+
+const NO_SIGHT = (reason) => ({ visible: false, dist: Infinity, range: 0, reason });
+/** Contract: a missing playerId (solo, or the local player) means the host. */
+const idOf = (p) => p?.id ?? 'host';
+const round = (n, k = 1000) => Math.round(n * k) / k;
 
 /**
  * @param {{world: Object, bus: Object, rng: Object, difficulty?: string, tuning?: Object}} opts
@@ -34,7 +44,6 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
   const nav = world.nav;
   const ranks = floorRanks(world);
   const mover = createMover(world);
-  const scent = createScent(T, ranks);
   const anchors = world.anchors;
 
   const doodle = {
@@ -53,6 +62,8 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     reset,
     setActive,
     stun: (seconds) => stun(seconds, null),
+    releaseCatch,
+    snapshot,
     dispose,
     get active() {
       return active;
@@ -69,18 +80,18 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
   let stunLeft = 0;
   let caught = false;
 
-  let sight = { visible: false, dist: Infinity, range: 0, reason: 'asleep' };
-  let awareness = 0; // 0..1, spotted at 1
-  let seenAt = -Infinity;
-  let lastSeen = null; // {pos, floorId, t}
+  // What it knows about each player, keyed by player.id ('host' for a solo player with no id).
+  // Co-op passes two players; everything about "the player" below lives in one of these.
+  const people = new Map();
+  let target = null; // the record it's hunting (or would hunt), see pickTarget()
+  let targetSince = -Infinity;
+  let sight = NO_SIGHT('asleep'); // target's sight this frame
+
   let lastHeard = null; // {pos, floorId, t, loudness, kind}
   let lastNoise = null; // for the debug overlay, heard or not
-  let blindUntil = -Infinity;
-  let inLink = false; // player is in a slide/tunnel
 
   let ball = null; // {pos, floorId, phase: 'loose'|'fetch'|'carry', ignoreUntil}
   const treats = new Map(); // treatId → {id, pos, floorId, ignored}
-  let hide = null; // {spotId, pos, floorId, since}
 
   let goal = null; // current travel target {pos, floorId, complete, failed, replanAt}
   let lungeLeft = 0;
@@ -193,9 +204,96 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
   /** Close enough to grab something on the floor (or on low furniture). */
   const reached = (pos, floorId) => floorId === doodle.floorId && dist2D(doodle.pos, pos) <= T.itemReach + 0.5;
 
+  // ---- players ---------------------------------------------------------------------
+
+  function person(id) {
+    let rec = people.get(id);
+    if (!rec) {
+      rec = {
+        id,
+        player: null, // the Player passed this frame, null when it wasn't
+        hasId: false, // the Player carries its own id (CAUGHT then names it)
+        down: false,
+        released: false, // let go after a knock-out catch: ignored until reset()
+        sight: NO_SIGHT('no player'),
+        awareness: 0, // 0..1, spotted at 1
+        seenAt: -Infinity,
+        lastSeen: null, // {pos, floorId, t}
+        inLink: false, // in a slide/tunnel
+        blindUntil: -Infinity,
+        hide: null, // {spotId, pos, floorId, since, playerId}
+        scent: createScent(T, ranks),
+      };
+      people.set(id, rec);
+    }
+    return rec;
+  }
+
+  /** In play: not down and not let go of. Its Player may still be missing this frame. */
+  const live = (rec) => !!rec && !rec.down && !rec.released;
+  const here = (rec) => live(rec) && !!rec.player;
+  const floorDist = (p) => dist2D(p.pos, doodle.pos) + floorsApart(ranks, p.floorId, doodle.floorId) * FLOOR_COST;
+
+  /** Take this frame's players: a Player, an array of them, or nothing. */
+  function takePlayers(players) {
+    for (const rec of people.values()) rec.player = null;
+    for (const p of [].concat(players ?? [])) {
+      if (!p) continue;
+      const rec = person(idOf(p));
+      rec.player = p;
+      rec.hasId = p.id !== undefined;
+      rec.down = !!p.down;
+    }
+  }
+
+  /**
+   * Who to hunt: the visible player it's most aware of, otherwise the nearest. The current
+   * target keeps a margin and, while it's in view, at least targetHold s, so two players at
+   * similar ranges don't make it flip-flop. Mid-chase it only switches to someone it has
+   * properly spotted, never to someone it merely knows is closer.
+   */
+  function pickTarget() {
+    const cur = here(target) ? target : null;
+    if (target && !live(target)) target = null;
+    const chasing = doodle.state === S.CHASE;
+    if (chasing && task.pullOut && here(people.get(task.pullOut.playerId))) return setTarget(people.get(task.pullOut.playerId));
+    const score = (rec) => {
+      const mine = rec === cur;
+      if (rec.sight.visible) {
+        if (chasing && !mine && rec.awareness < 1) return -Infinity;
+        return 100 + 10 * (rec.awareness + (mine ? T.targetStick : 0));
+      }
+      if (chasing && !mine) return -Infinity;
+      return -floorDist(rec.player) + (mine ? T.targetStickDist : 0);
+    };
+    let best = cur;
+    let bestScore = cur ? score(cur) : -Infinity;
+    for (const rec of people.values()) {
+      if (rec === cur || !here(rec)) continue;
+      const s = score(rec);
+      if (s > bestScore) [best, bestScore] = [rec, s];
+    }
+    if (!best) return; // nobody here this frame: keep remembering whoever it was after
+    if (cur && best !== cur && cur.sight.visible && clock - targetSince < T.targetHold) return;
+    setTarget(best);
+  }
+
+  function setTarget(rec) {
+    if (rec === target) return;
+    const had = target;
+    target = rec;
+    targetSince = clock;
+    if (had && doodle.state === S.CHASE) {
+      // Switching quarry mid-chase: start the chase bookkeeping over on the new one.
+      task.lostFor = 0;
+      task.stuckFor = 0;
+      goal = null;
+    }
+  }
+
   // ---- per-frame ---------------------------------------------------------------
 
-  function update(dt, player) {
+  function update(dt, players) {
     if (!active || !(dt > 0)) {
       doodle.speed = 0;
       return;
@@ -204,16 +302,20 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     stateTime += dt;
     movedThisFrame = 0;
     lookingAround = false;
-    if (player) scent.update(clock, dt, player, player.hidden ? hide : null);
-    think(dt, player ?? null);
+    takePlayers(players);
+    for (const rec of people.values()) {
+      const p = here(rec) ? rec.player : null;
+      rec.scent.update(clock, dt, p, p?.hidden ? rec.hide : null);
+    }
+    think(dt);
     const instant = movedThisFrame / dt;
     doodle.speed += (instant - doodle.speed) * Math.min(1, dt * 12);
     if (doodle.speed < 0.02) doodle.speed = 0;
     doodle.pose = poseFor();
-    writeDebug(player);
+    writeDebug();
   }
 
-  function think(dt, player) {
+  function think(dt) {
     const st = doodle.state;
     if (st === S.CATCH) return;
     if (st === S.SLEEP) {
@@ -228,19 +330,25 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     }
 
     const eating = st === S.DISTRACTED && task.mode === 'eat';
-    sight = look(doodle, player, world, T, { blind: eating || inLink || clock < blindUntil });
-    if (sight.visible) {
-      seenAt = clock;
-      lastSeen = { pos: copy(player.pos), floorId: player.floorId, t: clock };
-      awareness = Math.min(1, awareness + dt / (T.spotTime + T.spotTimePerMeter * sight.dist));
-    } else awareness = Math.max(0, awareness - dt * 0.5);
+    for (const rec of people.values()) {
+      const p = here(rec) ? rec.player : null;
+      rec.sight = p ? look(doodle, p, world, T, { blind: eating || rec.inLink || clock < rec.blindUntil }) : NO_SIGHT('no player');
+      if (rec.sight.visible) {
+        rec.seenAt = clock;
+        rec.lastSeen = { pos: copy(p.pos), floorId: p.floorId, t: clock };
+        rec.awareness = Math.min(1, rec.awareness + dt / (T.spotTime + T.spotTimePerMeter * rec.sight.dist));
+      } else rec.awareness = Math.max(0, rec.awareness - dt * 0.5);
+    }
+    pickTarget();
+    sight = target?.sight ?? NO_SIGHT('no player');
 
-    if (player && tryCatch(player)) return;
+    if (resting()) return search(dt); // the pause after a knock-out catch: no catching either
+    if (tryCatchAny()) return;
 
     // Heading for a treat or the ball it only has eyes for that; carrying the
     // ball home it still notices you (and drops the ball to chase).
     const focused = st === S.DISTRACTED && task.mode !== 'carry';
-    if (st !== S.CHASE && !focused && sight.visible && awareness >= 1) {
+    if (st !== S.CHASE && !focused && sight.visible && target.awareness >= 1) {
       if (ball?.phase === 'carry') dropBall();
       setState(S.CHASE, { lostFor: 0, stuckFor: 0, pullOut: null });
     }
@@ -251,32 +359,42 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
       case S.INVESTIGATE:
         return investigate(dt);
       case S.SNIFF:
-        return sniff(dt, player);
+        return sniff(dt);
       case S.SEARCH:
         return search(dt);
       case S.CHASE:
-        return chase(dt, player);
+        return chase(dt);
       case S.DISTRACTED:
         return distracted(dt);
     }
   }
 
-  function tryCatch(player) {
+  /** Every player in reach gets checked, the target first. */
+  function tryCatchAny() {
+    if (caught) return false;
+    if (here(target) && tryCatch(target)) return true;
+    for (const rec of people.values()) if (rec !== target && here(rec) && tryCatch(rec)) return true;
+    return false;
+  }
+
+  function tryCatch(rec) {
+    const player = rec.player;
     if (caught || player.hidden || player.floorId !== doodle.floorId) return false;
     if (dist2D(doodle.pos, player.pos) > DOODLE_BODY.catchRange) return false;
     const cell = worldToCell(nav, player.floorId, player.pos.x, player.pos.z);
     if (cell && flagsAt(nav, cell) & NAV.PLAYER_ONLY) return false; // safe inside a crawl tunnel
     if (!canReach(doodle, player, world)) return false; // not through walls or closed doors
     doodle.yaw = yawTo(doodle.pos, player.pos);
-    catchPlayer('tackle');
+    catchPlayer('tackle', rec);
     return true;
   }
 
-  function catchPlayer(how) {
+  function catchPlayer(how, rec) {
     if (caught) return;
     caught = true;
-    setState(S.CATCH, { how });
-    say(EVENTS.CAUGHT, { how });
+    setState(S.CATCH, { how, playerId: rec.id });
+    // A Player without an id is the solo player: CAUGHT stays {how}, as before co-op.
+    say(EVENTS.CAUGHT, rec.hasId ? { how, playerId: rec.id } : { how });
   }
 
   // ---- states ---------------------------------------------------------------------
@@ -302,13 +420,24 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     return false;
   }
 
+  /** The freshest scent within reach across every player still in play, tagged with whose it is. */
+  function smell(opts) {
+    let best = null;
+    for (const rec of people.values()) {
+      if (!live(rec)) continue;
+      const s = rec.scent.smell(clock, doodle.pos, doodle.floorId, opts);
+      if (s && (!best || s.t > best.t)) best = { ...s, playerId: rec.id };
+    }
+    return best;
+  }
+
   /** Fresh scent nearby starts a SNIFF. */
   function checkScent() {
     if (clock < smellAt) return false;
     smellAt = clock + AWAKE_SMELL_EVERY;
-    const target = scent.smell(clock, doodle.pos, doodle.floorId, { after: sniffedUpTo, maxAge: T.sniffFresh * T.nose });
-    if (!target) return false;
-    setState(S.SNIFF, { target, after: sniffedUpTo, refreshAt: clock + 0.5 });
+    const trail = smell({ after: sniffedUpTo, maxAge: T.sniffFresh * T.nose });
+    if (!trail) return false;
+    setState(S.SNIFF, { target: trail, after: sniffedUpTo, refreshAt: clock + 0.5 });
     return true;
   }
 
@@ -367,46 +496,56 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     if (task.lingerLeft <= 0) setState(S.PATROL);
   }
 
-  function sniff(dt, player) {
+  function sniff(dt) {
     if (checkDistractions()) return;
-    const target = task.target;
-    if (task.checking) return checkHideSpot(dt, player, target.pool);
+    const trail = task.target;
+    if (task.checking) return checkHideSpot(dt, people.get(trail.playerId), trail.pool);
     if (clock >= task.refreshAt) {
       task.refreshAt = clock + 0.5;
-      const fresher = scent.smell(clock, doodle.pos, doodle.floorId, { after: Math.max(task.after, target.t) });
-      if (fresher && fresher.t > target.t) task.target = fresher;
+      const fresher = smell({ after: Math.max(task.after, trail.t) });
+      if (fresher && fresher.t > trail.t) task.target = fresher;
     }
     if (!travel(dt, task.target.pos, task.target.floorId, T.sniffSpeed, { snapDist: 2.5 }).arrived) return;
     const got = task.target;
+    const owner = people.get(got.playerId);
     sniffedUpTo = Math.max(sniffedUpTo, got.t);
     if (got.kind === 'pool') {
-      if (got.pool.hideSpotId && hide?.spotId === got.pool.hideSpotId) {
+      if (got.pool.hideSpotId && owner?.hide?.spotId === got.pool.hideSpotId) {
         task.checking = true;
         task.checkFor = 0;
         return;
       }
-      scent.markChecked(got.pool, clock, T.poolRecheck);
+      owner?.scent.markChecked(got.pool, clock, T.poolRecheck);
     }
     task.after = got.t;
-    const next = scent.smell(clock, doodle.pos, doodle.floorId, { after: task.after });
+    const next = smell({ after: task.after });
     if (next) task.target = next;
     else setState(S.SEARCH, { center: copy(doodle.pos), floorId: doodle.floorId, left: T.searchTime * 0.5 });
   }
 
   /** Nose at a hiding spot: a hide that's gone on long enough gets pulled out. */
-  function checkHideSpot(dt, player, pool) {
+  function checkHideSpot(dt, rec, pool) {
     task.checkFor += dt;
     lookingAround = true;
     face(pool.pos, dt);
-    const stillThere = hide && hide.spotId === pool.hideSpotId && player?.hidden;
-    if (stillThere && task.checkFor >= 1 && clock - hide.since >= T.hideSniffTime) return catchPlayer('pulledOut');
+    const hide = rec?.hide;
+    const stillThere = live(rec) && hide && hide.spotId === pool.hideSpotId && rec.player?.hidden;
+    if (stillThere && task.checkFor >= 1 && clock - hide.since >= T.hideSniffTime) return catchPlayer('pulledOut', rec);
     if (!stillThere || task.checkFor >= T.sniffCheckTime) {
-      scent.markChecked(pool, clock, T.poolRecheck);
+      rec?.scent.markChecked(pool, clock, T.poolRecheck);
       setState(S.SEARCH, { center: copy(doodle.pos), floorId: doodle.floorId, left: T.searchTime * 0.5 });
     }
   }
 
+  /** Standing over a knocked-out player for a moment (releaseCatch) before it hunts the other. */
+  const resting = () => doodle.state === S.SEARCH && task.pauseLeft > 0;
+
   function search(dt) {
+    if (task.pauseLeft > 0) {
+      task.pauseLeft -= dt;
+      if (task.pauseLeft <= 0) huntSurvivor();
+      return;
+    }
     if (task.left === undefined) task.left = T.searchTime;
     if (!task.center) {
       task.center = copy(doodle.pos);
@@ -439,18 +578,23 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     return { pos: copy(center), floorId };
   }
 
-  function chase(dt, player) {
+  function chase(dt) {
+    const rec = live(target) ? target : null;
+    const player = rec?.player ?? null;
     if (task.pullOut) {
-      if (hide && hide.spotId === task.pullOut.spotId && player?.hidden) return pullOut(dt, task.pullOut);
+      const owner = people.get(task.pullOut.playerId);
+      const hide = owner?.hide;
+      if (live(owner) && hide && hide.spotId === task.pullOut.spotId && owner.player?.hidden) return pullOut(dt, task.pullOut);
       task.pullOut = null; // they came out: back to a normal chase
     }
     task.lostFor = sight.visible ? 0 : task.lostFor + dt;
     // Just out of sight it still "knows" where you went (it hears you), briefly.
-    if (!sight.visible && task.lostFor < T.trackTime && player && !player.hidden && !inLink)
-      lastSeen = { pos: copy(player.pos), floorId: player.floorId, t: clock };
+    if (!sight.visible && task.lostFor < T.trackTime && player && !player.hidden && !rec.inLink)
+      rec.lastSeen = { pos: copy(player.pos), floorId: player.floorId, t: clock };
+    const lastSeen = rec?.lastSeen;
     if (task.lostFor > T.chaseGiveUp || !lastSeen) return lose(S.SEARCH);
 
-    if (lungeLeft > 0 || (sight.visible && canLunge(player))) return lunge(dt, player);
+    if (lungeLeft > 0 || (sight.visible && canLunge(player))) return lunge(dt, player, lastSeen);
 
     const r = travel(dt, lastSeen.pos, lastSeen.floorId, T.chaseSpeed, { replanEvery: T.repathInterval });
     if (sight.visible && sight.dist < 3) face(player.pos, dt);
@@ -463,7 +607,7 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     face(player.pos, dt);
     task.stuckFor += dt;
     if (task.stuckFor > T.unreachableGiveUp) {
-      blindUntil = clock + 4;
+      rec.blindUntil = clock + 4;
       lose(S.PATROL);
     }
   }
@@ -473,7 +617,7 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     return lineWalkable(nav, doodle.floorId, doodle.pos, player.pos, lockedCells(world.doors));
   }
 
-  function lunge(dt, player) {
+  function lunge(dt, player, lastSeen) {
     if (lungeLeft <= 0) {
       lungeLeft = T.lungeTime;
       lungeReadyAt = clock + T.lungeCooldown;
@@ -503,7 +647,7 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     const close = spot.floorId === doodle.floorId && dist2D(doodle.pos, spot.pos) <= T.pullOutReach;
     if (close || (r.arrived && reached(spot.pos, spot.floorId))) {
       face(spot.pos, dt);
-      catchPlayer('pulledOut');
+      catchPlayer('pulledOut', people.get(spot.playerId));
     } else if (r.arrived) {
       task.pullOut = null; // can't get to that hiding spot
       lose(S.SEARCH);
@@ -511,7 +655,7 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
   }
 
   function lose(next) {
-    const at = lastSeen ?? { pos: copy(doodle.pos), floorId: doodle.floorId };
+    const at = target?.lastSeen ?? { pos: copy(doodle.pos), floorId: doodle.floorId };
     if (next === S.SEARCH) setState(S.SEARCH, { center: copy(at.pos), floorId: at.floorId });
     else setState(next);
   }
@@ -597,7 +741,7 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
 
   // ---- reacting to the world ---------------------------------------------------------
 
-  const calm = (st) => st === S.PATROL || st === S.INVESTIGATE || st === S.SNIFF || st === S.SEARCH;
+  const calm = (st) => !resting() && (st === S.PATROL || st === S.INVESTIGATE || st === S.SNIFF || st === S.SEARCH);
 
   on(EVENTS.NOISE, (n) => {
     if (!active || !n?.pos || ownNoise(n)) return;
@@ -607,7 +751,8 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     lastHeard = { pos: copy(n.pos), floorId: n.floorId, t: clock, loudness: n.loudness, kind: n.kind };
     const st = doodle.state;
     if (calm(st)) setState(S.INVESTIGATE, { pos: lastHeard.pos, floorId: lastHeard.floorId });
-    else if (st === S.CHASE && task.lostFor > 0 && !task.pullOut) lastSeen = { pos: lastHeard.pos, floorId: lastHeard.floorId, t: clock };
+    else if (st === S.CHASE && task.lostFor > 0 && !task.pullOut && target)
+      target.lastSeen = { pos: lastHeard.pos, floorId: lastHeard.floorId, t: clock };
   });
 
   on(EVENTS.BALL_LANDED, (b) => {
@@ -649,32 +794,42 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     stun(T.stunTime, { pos: { x: shot.origin.x, y: nav.floors[floorId]?.y ?? 0, z: shot.origin.z }, floorId });
   });
 
+  // Hide and link events key their state by player. The guest's arrive replayed with
+  // playerId 'guest' and remote: true; for the host's Doodle those are senses like any other.
   on(EVENTS.HIDE, (h) => {
     if (!h) return;
-    hide = { spotId: h.spotId, pos: copy(h.pos), floorId: h.floorId, since: clock };
-    if (!active) return;
+    const rec = person(h.playerId ?? 'host');
+    const hide = { spotId: h.spotId, pos: copy(h.pos), floorId: h.floorId, since: clock, playerId: rec.id };
+    rec.hide = hide;
+    if (!active || !live(rec)) return;
     const st = doodle.state;
     // "Could it see you at that moment?" — sight is computed each frame, and the
     // player is already hidden by the time HIDE arrives, so use the last sighting.
     if (!(calm(st) || st === S.CHASE || (st === S.DISTRACTED && task.mode === 'carry'))) return;
-    if (clock - seenAt > T.hideSeenGrace) return;
+    if (clock - rec.seenAt > T.hideSeenGrace) return;
+    // Hot on someone else's heels and still seeing them: it keeps after them.
+    if (st === S.CHASE && target && target !== rec && target.sight.visible) return;
     if (ball?.phase === 'carry') dropBall();
+    setTarget(rec);
     if (st === S.CHASE) task.pullOut = hide;
     else setState(S.CHASE, { lostFor: 0, stuckFor: 0, pullOut: hide });
   });
 
-  on(EVENTS.UNHIDE, () => {
-    hide = null;
+  on(EVENTS.UNHIDE, (u) => {
+    person(u?.playerId ?? 'host').hide = null;
   });
 
-  on(EVENTS.LINK_ENTER, () => {
-    inLink = true;
-    if (active && doodle.state === S.CHASE && !task.pullOut) lose(S.SEARCH); // it can't follow you in there
+  on(EVENTS.LINK_ENTER, (l) => {
+    const rec = person(l?.playerId ?? 'host');
+    rec.inLink = true;
+    // It can't follow you in there.
+    if (active && doodle.state === S.CHASE && !task.pullOut && (!target || target === rec)) lose(S.SEARCH);
   });
 
-  on(EVENTS.LINK_EXIT, () => {
-    inLink = false;
-    blindUntil = clock + 0.5;
+  on(EVENTS.LINK_EXIT, (l) => {
+    const rec = person(l?.playerId ?? 'host');
+    rec.inLink = false;
+    rec.blindUntil = clock + 0.5;
   });
 
   // ---- contract methods ------------------------------------------------------------
@@ -693,27 +848,70 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     sleepLeft = wakeDelay;
     stunLeft = 0;
     caught = false;
-    awareness = 0;
-    seenAt = -Infinity;
-    lastSeen = null;
     lastHeard = null;
-    blindUntil = -Infinity;
-    inLink = false;
-    hide = null;
+    for (const rec of people.values()) rec.scent.clear();
+    people.clear(); // a new day forgets everyone, knocked-out players included
+    target = null;
+    targetSince = -Infinity;
     lungeLeft = 0;
     mover.clear();
-    scent.clear();
     sniffedUpTo = -Infinity;
     // The ball stays where it was; if it was in Doodle's mouth it wakes up still holding it.
     if (ball?.phase === 'fetch') ball.phase = 'loose';
     setState(S.SLEEP);
     goal = null;
-    sight = { visible: false, dist: Infinity, range: 0, reason: 'asleep' };
+    sight = NO_SIGHT('asleep');
     doodle.pose = 'sleep';
   }
 
   function setActive(on) {
     active = !!on;
+  }
+
+  /**
+   * Knock-out: let go of a caught player, who is now spectating. It forgets them until reset(),
+   * stands still for releasePause s, then goes looking for whoever is left.
+   */
+  function releaseCatch(playerId = 'host') {
+    const rec = person(playerId);
+    rec.released = true;
+    rec.hide = null;
+    rec.awareness = 0;
+    rec.scent.clear();
+    if (target === rec) target = null;
+    if (doodle.state !== S.CATCH) return;
+    caught = false;
+    setState(S.SEARCH, { center: copy(doodle.pos), floorId: doodle.floorId, pauseLeft: T.releasePause });
+  }
+
+  /** After the pause: head for (roughly) where the other player is; its senses do the rest. */
+  function huntSurvivor() {
+    let best = null;
+    for (const rec of people.values())
+      if (here(rec) && (!best || floorDist(rec.player) < floorDist(best.player))) best = rec;
+    if (!best) return; // nobody left in play: an ordinary search where it stands
+    const p = best.player;
+    const at = p.hidden && best.hide ? best.hide : { pos: p.pos, floorId: p.floorId };
+    const spot = randomPointNear(at.pos, at.floorId, T.releaseHuntFuzz);
+    setTarget(best);
+    setState(S.INVESTIGATE, { pos: spot.pos, floorId: spot.floorId });
+  }
+
+  /** Co-op host: everything the guest's puppet needs to draw this Doodle, as plain JSON. */
+  function snapshot() {
+    const p = doodle.pos;
+    return {
+      pos: { x: round(p.x), y: round(p.y), z: round(p.z) },
+      yaw: round(doodle.yaw),
+      pitch: round(doodle.pitch ?? 0),
+      pose: doodle.pose,
+      mood: doodle.mood,
+      carrying: doodle.carrying,
+      speed: round(doodle.speed, 100),
+      state: doodle.state,
+      floorId: doodle.floorId,
+      target: target?.id ?? null,
+    };
   }
 
   function dispose() {
@@ -739,23 +937,37 @@ export function createDoodleCore({ world, bus, rng, difficulty = 'normal', tunin
     return doodle.speed > 0.15 ? 'walk' : 'idle';
   }
 
-  function writeDebug(player) {
+  function writeDebug() {
     const d = doodle.debug;
     const route = mover.route.slice(mover.index);
     d.path = route.length ? [copy(doodle.pos), ...route.map((w) => ({ x: w.x, y: w.y, z: w.z, floorId: w.floorId }))] : [];
     d.target = goal ? { ...copy(goal.pos), floorId: goal.floorId } : null;
+    const player = here(target) ? target.player : null;
+    const recs = [...people.values()];
     d.senses = {
-      awareness,
+      awareness: target?.awareness ?? 0,
       sight,
       sightRange: player ? Math.max(sightRange(player.hidden ? 0 : player.visibility(), T), T.closeSense) : T.sightMax,
       fov: T.fov,
       hearing: T.hearing,
       lastNoise,
       lastHeard,
-      lastSeen,
-      crumbs: scent.crumbs,
-      pools: scent.pools.map((p) => ({ pos: p.pos, floorId: p.floorId, radius: scent.poolRadius(p, clock), hidden: !!p.hideSpotId })),
-      task: task.mode ?? (task.checking ? 'checking' : ''),
+      lastSeen: target?.lastSeen ?? null,
+      targetId: target?.id ?? null,
+      players: recs.map((r) => ({
+        id: r.id,
+        down: r.down,
+        released: r.released,
+        awareness: r.awareness,
+        visible: r.sight.visible,
+        hidden: !!r.hide,
+        inLink: r.inLink,
+      })),
+      crumbs: recs.length === 1 ? recs[0].scent.crumbs : recs.flatMap((r) => r.scent.crumbs),
+      pools: recs.flatMap((r) =>
+        r.scent.pools.map((p) => ({ pos: p.pos, floorId: p.floorId, radius: r.scent.poolRadius(p, clock), hidden: !!p.hideSpotId })),
+      ),
+      task: task.mode ?? (task.checking ? 'checking' : task.pauseLeft > 0 ? 'pause' : ''),
       ball: ball ? { pos: ball.pos, floorId: ball.floorId, phase: ball.phase } : null,
       treats: [...treats.values()],
       clock,

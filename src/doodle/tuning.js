@@ -70,6 +70,13 @@ const NORMAL = Object.freeze({
   searchTime: 10,
   searchRadius: 5,
   repathInterval: 0.3, // chase re-plans this often
+
+  // ---- co-op (two players) ----
+  targetHold: 1, // s it keeps a target that's in view before switching to the other player
+  targetStick: 0.3, // awareness margin the other player must beat to take over
+  targetStickDist: 3, // m nearer the other player must be when neither is in view
+  releasePause: 5, // knock-out: stands still this long after letting go of a caught player
+  releaseHuntFuzz: 4, // ...then heads to a random point this close to the other player
 });
 
 const EASY = Object.freeze({
