@@ -2,9 +2,11 @@
 
 Entry points in [index.js](index.js):
 
-- `createUI({ root, bus, leaderboard })`: menus, cards and the HUD. All its DOM goes inside
+- `createUI({ root, bus, leaderboard, coop })`: menus, cards and the HUD. All its DOM goes inside
   `root`. `leaderboard` is optional (`src/leaderboard/`); without an enabled one there's no
-  leaderboard UI.
+  leaderboard UI. `coop` is `{enabled, code?}`; without `enabled` nothing co-op shows and solo
+  play looks exactly as before. An extra `debug` option (default: `?debug` in the URL) turns on
+  the co-op lag readout.
 - `createCutscenes({ camera, getScene, ui, bus })`: camera moves and overlays between days.
 
 Styles live in [ui.css](ui.css), injected once with a `<link>`. `showTitle()` waits for the
@@ -17,6 +19,9 @@ the crayon lettering, icons and doodles are all drawn on canvas.
 |---|---|
 | [index.js](index.js) | `createUI` (settings, HUD, screens) and a re-export of `createCutscenes`. |
 | [screens.js](screens.js) | Title, How to Play, Settings, the DAY N card, pause, win and game over. |
+| [coopscreens.js](coopscreens.js) | Co-op: the "Play with a friend" menu, the lobby and the OK message box. |
+| [coop.js](coop.js) | Pure: co-op words, name and code checks, the lobby's status line, and the notice state machine. |
+| [notices.js](notices.js) | Co-op notices over the game: toasts, the "Spectating" and "Waiting" banners, the debug lag readout. |
 | [hud.js](hud.js) | The center dot and hand, the prompt line, the held item, the stamina bar, lock toasts and the vignette. |
 | [cutscenes.js](cutscenes.js) | `playCatch`, `playGameOver`, `playEscape` and `playWake`. |
 | [crayon.js](crayon.js) | Procedural crayon strokes, lettering and the taped-up drawing of Doodle. |
@@ -79,6 +84,54 @@ the crayon lettering, icons and doodles are all drawn on canvas.
 - **`recordTime(difficulty, seconds)`:** keeps the best time per difficulty in
   `doodles-playhouse.best.v1`. It returns true for a new record; a tie doesn't count.
 
+## Co-op (only with `coop.enabled`)
+
+- **Title:** a "Play with a friend" card under the difficulty cards opens a menu over the title:
+  - **Host a game:** your name → a difficulty card → a catch rule (Shared or Knock-out, one line
+    each). The last tap resolves `showTitle()` with `{coop: {role: 'host', name, difficulty, rule}}`.
+  - **Join a game:** your name and the 6-letter room code → `{coop: {role: 'join', name, code}}`.
+    The code field keeps only code letters as you type (no 0/O or 1/I/L), and pasting a whole
+    invite link fills in its code.
+  - Names are cleaned like the leaderboard's (`entries.js#cleanName`, checked with `nameProblem`),
+    and codes with `room.js#cleanCode`. The name is remembered in `doodles-playhouse.name.v1`,
+    the same key the win screen uses.
+  - Back or Esc steps back; from the first step it closes the menu and the title stays up.
+  - **`coop.code`** (an opened `?join=` link): the first title opens straight on Join with the
+    code filled in, focused on whatever still needs typing.
+- **`showLobby(info)` → `{update, result, close}`:**
+  - The room code in big crayon letters.
+  - The host gets the invite link with **Copy** (clipboard, else it selects the link), plus
+    **Share** where `navigator.share` exists.
+  - Both names, the difficulty and the rule, and a status line: "Waiting for your friend…",
+    "BO is here. Press Start…", "Waiting for AL to start…", or `update({status})`.
+  - The host's **Start** is enabled once `partnerName` is set. The guest only has **Cancel**.
+    Esc cancels.
+  - Choosing Start or Cancel resolves `result` and closes the lobby. **`close()` from main.js
+    leaves `result` unsettled**, so race it against your own "host started" signal.
+  - On a phone on its side the code and link sit beside the names, so nothing scrolls.
+- **`showMessage(text)`:** the text and OK. OK, Enter or Esc resolves it.
+- **Notices** (notices.js, drawn over the game, so they show while the HUD is hidden):
+
+  | Event | Shows |
+  |---|---|
+  | `PARTNER_JOINED {name}` | "BO joined" (and remembers the name) |
+  | `PARTNER_LEFT {name, reason}` | "BO left" ("BO lost connection" for `timeout`); clears both banners |
+  | `PLAYER_DOWN {local: false}` | "Doodle caught BO!" |
+  | `PLAYER_DOWN {local: true}` | the "Spectating BO" banner (BO = the partner), until `PLAYER_UP {local: true}` or the next day card |
+  | `NET_STATUS {status: 'waiting'}` | the "Waiting for BO…" banner, until `status: 'ok'` |
+  | `NET_STATUS {lagMs}` | in debug, "lag 120 ms" in the bottom-left corner |
+
+  The partner's name also comes from the lobby's `partnerName`.
+- **Win:** with `results.coop` the stats show both names and the rule instead of the solo best.
+  The host (`coop.canPost`) gets **Post our time**, which calls
+  `leaderboard.submit({name, name2, seconds, days, route, difficulty, coop: rule})` and then shows
+  the place and that co-op board's top 10. The guest gets a note that the host can post it.
+  Test runs and runs under a minute behave as in solo.
+- **Leaderboard panel:** a Solo / Shared / Knock-out row above the difficulty tabs. The co-op
+  ones call `top(difficulty, 10, {coop: rule})`, and co-op rows read "AL & BO".
+- **HUD:** shows only the local player. A `PROMPT` or `HELD` whose `playerId` isn't the local
+  player's is ignored (the local id comes from `update()`'s `player.id`).
+
 ## HUD
 
 | Element | Behaviour |
@@ -107,7 +160,8 @@ When a cutscene finishes, it:
   2. Doodle pounces into frame with `setPose('pounce')` and `setMood('hunt')`. Its head tips
      down at you and a loud bark shakes the screen as its face fills it.
   3. Three licks (`'lick'` pose), each leaving slobber on the "lens" that drips down.
-  4. Fade to black.
+  4. Fade to black. With `knockout: true` (co-op knock-out) it skips the fade and ends right
+     after the licks (about 2.5 s), because the run goes on through the partner's eyes.
 - **`playGameOver`** (about 10 s):
   1. The same knockdown and pounce.
   2. In `'drag'` pose, Doodle tugs you backward, tug by tug, toward `anchors.kennel`, along a
@@ -133,7 +187,7 @@ dog), so they frame any model size without knowing its parts.
 
 - **`crayon`:** wax passes per stroke, gap chance and paper grain.
 - **`dayCard`:** fade-in, hold and fade-out times.
-- **`toastSeconds`** and **`screenFade`**.
+- **`toastSeconds`**, **`noticeSeconds`** (co-op notices) and **`screenFade`**.
 - **`hud`:** when the stamina bar hides and turns red, plus the vignette settings:
   - `vignette` turns it on or off.
   - `vignetteNear` / `vignetteFar` set its distances.
@@ -153,12 +207,20 @@ dog), so they frame any model size without knowing its parts.
   - every menu and every day card;
   - every cutscene: catch → day 2 → wake, game over, both escapes, and wake;
   - a HUD simulator: fake `PROMPT` and `HELD` events, "cycle all items", a stamina override
-    slider, and every toast.
+    slider, and every toast;
+  - a **Co-op** section: the co-op menu, the title as an invite link opens it, the host and guest
+    lobbies (a friend "joins" after 2.5 s), a message, every notice event, the co-op win (host and
+    guest), the leaderboard with co-op tabs (a fake co-op board), the knock-out catch, and partner
+    sounds from a fake partner 3 m to your left.
+  - Co-op is on there; `?coop=0` turns it off to compare with solo.
 - **Extras on the UI object** (not in the contract):
   - `layer` (cutscenes draw into it)
   - `hud`
   - `openSettings()`
   - `openHowTo()`
   - `openLeaderboard(difficulty?)`
+  - `notices` (its `state`: partner name, banners, lag)
+  - `openCoop(code?)`: the co-op menu alone
+  - `setInviteCode(code)`: the next title opens on Join with this code
   - `changeSettings(patch)`
   - `bestTimes()`

@@ -1,12 +1,15 @@
-// Menus and cards: title (with difficulty select, How to Play, Settings and
-// the Leaderboard), the DAY N card, pause, win (with posting to the
-// leaderboard) and game over. Each show*() returns a promise that resolves
-// with the player's choice.
+// Menus and cards: title (with difficulty select, How to Play, Settings, the
+// Leaderboard and, with co-op on, "Play with a friend"), the DAY N card, pause,
+// win (with posting to the leaderboard) and game over. Each show*() returns a
+// promise that resolves with the player's choice. The co-op menu, lobby and
+// message box are in coopscreens.js.
 
 import { DIFFICULTIES, MAX_DAYS } from '../core/contracts.js';
 import { createRng } from '../core/rng.js';
 import { cue } from '../audio/cues.js';
 import { NAME_MAX, cleanName, nameProblem, ranksOf, roundSeconds, timeProblem } from '../leaderboard/entries.js';
+import { BOARD_MODES, BOARD_MODE_NAMES, COOP_TEXT, RULE_INFO, boardOpts, teamName } from './coop.js';
+import { createCoopScreens } from './coopscreens.js';
 import { CRAYONS, crayonDot, crayonText, doodleSketch } from './crayon.js';
 import { button, el, tween, wait } from './dom.js';
 import { QUALITIES, SENSITIVITY_RANGE } from './settings.js';
@@ -27,16 +30,20 @@ import { UI_TUNING } from './tuning.js';
 /**
  * @param {{layer: HTMLElement, settings: () => Object, changeSettings: (patch: Object) => void, bestTimes: () => Object,
  *   inputMode?: () => 'touch'|'desktop', onPlay?: () => void, leaderboard?: Object|null,
- *   lastDifficulty?: () => string|null, playerName?: () => string, savePlayerName?: (name: string) => void}} deps
+ *   lastDifficulty?: () => string|null, playerName?: () => string, savePlayerName?: (name: string) => void,
+ *   coop?: {enabled: boolean, code?: string|null}|null}} deps
  *   inputMode: menus show touch wording and controls in touch mode; onPlay runs inside the Play tap.
  *   leaderboard: an enabled Leaderboard (contracts.js), or null for none; lastDifficulty picks its first tab;
- *   playerName / savePlayerName remember the name last posted.
+ *   playerName / savePlayerName remember the name last posted (and typed in the co-op menu).
+ *   coop: with enabled true the title offers "Play with a friend" and the board gets co-op tabs; code opens Join.
  */
 export function createScreens({
   layer, settings, changeSettings, bestTimes, inputMode = () => 'desktop', onPlay = () => {},
-  leaderboard = null, lastDifficulty = () => null, playerName = () => '', savePlayerName = () => {},
+  leaderboard = null, lastDifficulty = () => null, playerName = () => '', savePlayerName = () => {}, coop = null,
 }) {
   const touch = () => inputMode() === 'touch';
+  const coopOn = !!coop?.enabled;
+  let inviteCode = coopOn && coop.code ? String(coop.code) : null; // used by the first title only
 
   function screen(className = '') {
     const s = el('div', `dp-screen ${className}`.trim());
@@ -62,6 +69,8 @@ export function createScreens({
     addEventListener('keydown', h);
     return () => removeEventListener('keydown', h);
   }
+
+  const coopScreens = createCoopScreens({ screen, leave, onEsc, touch, onPlay, playerName, savePlayerName });
 
   // ---- sub-panels ------------------------------------------------------------
 
@@ -164,7 +173,7 @@ export function createScreens({
   function boardRow(r, rank, mine) {
     const tr = el('tr', mine ? 'dp-me' : '', [
       el('td', 'dp-rank', String(rank)),
-      el('td', 'dp-name', String(r.name ?? '')),
+      el('td', 'dp-name', teamName(r.name, r.name2)),
       el('td', 'dp-time', formatTimeTenths(r.seconds)),
       el('td', 'dp-days', String(r.days ?? '')),
       el('td', 'dp-route', ROUTE_SHORT[r.route] ?? ''),
@@ -186,8 +195,21 @@ export function createScreens({
       const body = el('div', 'dp-board-body');
       body.setAttribute('aria-live', 'polite');
       let current = DIFFICULTIES.includes(initial) ? initial : 'normal';
+      let mode = 'solo'; // co-op on: 'shared' / 'knockout' show that rule's co-op boards
       let ticket = 0;
       let closed = false;
+
+      const modeButtons = coopOn
+        ? BOARD_MODES.map((m) => {
+          const b = button(BOARD_MODE_NAMES[m], () => selectMode(m), 'dp-tab dp-mode');
+          b.dataset.mode = m;
+          b.setAttribute('role', 'tab');
+          b.setAttribute('aria-selected', String(m === mode));
+          return b;
+        })
+        : null;
+      const modes = modeButtons ? el('div', 'dp-tabs dp-modes', modeButtons) : null;
+      if (modes) modes.setAttribute('role', 'tablist');
 
       const tabButtons = DIFFICULTIES.map((d) => {
         const b = button(DIFFICULTY_INFO[d].name, () => select(d), 'dp-tab');
@@ -203,7 +225,8 @@ export function createScreens({
         body.replaceChildren(message(BOARD_TEXT.loading));
         let rows;
         try {
-          rows = await leaderboard.top(current, 10);
+          const opts = boardOpts(mode);
+          rows = await (opts ? leaderboard.top(current, 10, opts) : leaderboard.top(current, 10));
         } catch {
           if (mine === ticket && !closed) body.replaceChildren(message(BOARD_TEXT.offline, button(BOARD_TEXT.retry, load)));
           return;
@@ -216,6 +239,11 @@ export function createScreens({
         for (const b of tabButtons) b.setAttribute('aria-selected', String(b.dataset.d === d));
         load();
       }
+      function selectMode(m) {
+        mode = m;
+        for (const b of modeButtons) b.setAttribute('aria-selected', String(b.dataset.mode === m));
+        load();
+      }
 
       const close = async () => {
         if (closed) return;
@@ -226,7 +254,7 @@ export function createScreens({
       };
       const back = button('Back', close, 'dp-primary');
       const offEsc = onEsc(close);
-      panel.append(tabs, body);
+      panel.append(...[modes, tabs, body].filter(Boolean));
       s.append(panel, back);
       select(current);
       back.focus({ preventScroll: true });
@@ -302,25 +330,67 @@ export function createScreens({
         return;
       }
       state = 'posted';
-      showPlace(result);
-    }
-
-    function showPlace({ id, rank = null, entry = {} }) {
-      const me = { ...entry, id, rank };
-      const list = el('div', 'dp-post-board');
-      box.replaceChildren(el('p', 'dp-post-head', placeText(rank, boardName)), list);
-      const load = async () => {
-        list.replaceChildren(el('p', 'dp-post-msg dp-dim', BOARD_TEXT.loading));
-        try {
-          list.replaceChildren(boardTable(await leaderboard.top(difficulty, 10), me));
-        } catch {
-          list.replaceChildren(el('p', 'dp-post-msg', BOARD_TEXT.topFailed), button(BOARD_TEXT.retry, load, 'dp-quiet'));
-        }
-      };
-      load();
+      showPlace(box, result, difficulty, boardName);
     }
 
     return { root: box, input };
+  }
+
+  /** After posting: the place, then that board's top 10 with our row marked. opts: top()'s co-op option. */
+  function showPlace(box, { id, rank = null, entry = {} }, difficulty, boardName, opts) {
+    const me = { ...entry, id, rank };
+    const list = el('div', 'dp-post-board');
+    box.replaceChildren(el('p', 'dp-post-head', placeText(rank, boardName)), list);
+    const load = async () => {
+      list.replaceChildren(el('p', 'dp-post-msg dp-dim', BOARD_TEXT.loading));
+      try {
+        list.replaceChildren(boardTable(await (opts ? leaderboard.top(difficulty, 10, opts) : leaderboard.top(difficulty, 10)), me));
+      } catch {
+        list.replaceChildren(el('p', 'dp-post-msg', BOARD_TEXT.topFailed), button(BOARD_TEXT.retry, load, 'dp-quiet'));
+      }
+    };
+    load();
+  }
+
+  /**
+   * The co-op win's box: names are known already, so just "Post our time". Only the host
+   * posts (canPost); the guest gets a note. Same shape as postBox's result (input is null).
+   */
+  function coopPostBox({ route, days, seconds, difficulty, coop }) {
+    if (!leaderboard) return null;
+    if (!leaderboard.canSubmit) return { root: el('p', 'dp-sub dp-post-note', BOARD_TEXT.testRun), input: null };
+    if (timeProblem(roundSeconds(seconds))) return null;
+    if (!coop.canPost) return { root: el('p', 'dp-sub dp-post-note', COOP_TEXT.coopBoardsNote), input: null };
+    const [name, name2] = (coop.names ?? []).map(cleanName);
+    if (nameProblem(name) || nameProblem(name2)) return null; // the menu cleaned them, so this is a bug elsewhere
+    const rule = coop.rule;
+    const boardName = `${RULE_INFO[rule]?.name ?? rule} ${DIFFICULTY_INFO[difficulty]?.name ?? difficulty}`;
+    const send = button(COOP_TEXT.postCoop, () => post(), 'dp-primary');
+    const msg = el('p', 'dp-post-msg');
+    msg.setAttribute('aria-live', 'polite');
+    const box = el('section', 'dp-post', [el('p', 'dp-post-label', `${teamName(name, name2)} on the ${boardName} co-op board`), send, msg]);
+    box.setAttribute('aria-label', BOARD_TEXT.title);
+    let state = 'idle';
+    async function post() {
+      if (state !== 'idle') return;
+      state = 'sending';
+      send.disabled = true;
+      send.textContent = BOARD_TEXT.sending;
+      msg.textContent = '';
+      let result;
+      try {
+        result = await leaderboard.submit({ name, name2, seconds, days, route, difficulty, coop: rule });
+      } catch (err) {
+        state = 'idle';
+        send.disabled = false;
+        send.textContent = err?.kind === 'invalid' ? COOP_TEXT.postCoop : BOARD_TEXT.retry;
+        msg.textContent = err?.message || BOARD_TEXT.offline;
+        return;
+      }
+      state = 'posted';
+      showPlace(box, result, difficulty, boardName, { coop: rule });
+    }
+    return { root: box, input: null };
   }
 
   // ---- title -----------------------------------------------------------------
@@ -407,6 +477,19 @@ export function createScreens({
       });
       grid.append(...cards);
 
+      // Co-op: one more choice under the cards. It opens its own menu over the title.
+      const startCoop = async (code = null) => {
+        if (chosen) return;
+        const choice = await coopScreens.openCoop(code);
+        if (!choice || chosen) return;
+        chosen = true;
+        dispose();
+        await leave(s);
+        resolve({ coop: choice });
+      };
+      const coopBtn = coopOn ? button('', () => startCoop(), 'dp-card dp-coop-play') : null;
+      coopBtn?.append(el('span', 'dp-card-name', COOP_TEXT.play), el('span', 'dp-card-line', COOP_TEXT.playLine));
+
       const footer = el('div', 'dp-row', [
         button('How to Play', () => openHowTo(), 'dp-quiet'),
         button('Settings', () => openSettings(), 'dp-quiet'),
@@ -414,7 +497,7 @@ export function createScreens({
       ]);
 
       const sketch = el('div', 'dp-sketch-wrap', [doodleSketch({ size: 190 })]);
-      s.append(art, tagline, grid, footer, sketch);
+      s.append(...[art, tagline, grid, coopBtn, footer, sketch].filter(Boolean));
 
       // Eyeshine blinking in the dark corners.
       const g = createRng('eyes');
@@ -428,6 +511,11 @@ export function createScreens({
         s.append(eyes);
       }
       cards[2].focus({ preventScroll: true });
+      if (inviteCode) {
+        const code = inviteCode;
+        inviteCode = null;
+        startCoop(code);
+      }
     });
   }
 
@@ -504,21 +592,31 @@ export function createScreens({
     });
   }
 
-  function showWin({ route, days, seconds, difficulty, best }) {
+  function showWin({ route, days, seconds, difficulty, best, coop = null }) {
     const record = bestTimes()[difficulty];
-    const post = postBox({ route, days, seconds, difficulty });
+    const post = coop ? coopPostBox({ route, days, seconds, difficulty, coop }) : postBox({ route, days, seconds, difficulty });
+    // Co-op: both names and the rule instead of the solo best time.
+    const rows = coop
+      ? [
+        ['Players', teamName(...(coop.names ?? []))],
+        ['Rule', RULE_INFO[coop.rule]?.name ?? coop.rule],
+        ['Difficulty', DIFFICULTY_INFO[difficulty]?.name ?? difficulty],
+        ['Days used', `${days} of ${MAX_DAYS}`],
+        ['Time', formatTime(seconds)],
+      ]
+      : [
+        ['Difficulty', DIFFICULTY_INFO[difficulty]?.name ?? difficulty],
+        ['Days used', `${days} of ${MAX_DAYS}`],
+        ['Time', formatTime(seconds)],
+        ['Best', record ? formatTime(record) : '—'],
+      ];
     const parts = [
       crayonText('YOU ESCAPED!', { size: 92, seed: 'win', rotate: 0.12 }).canvas,
       el('p', 'dp-sub', ROUTE_TEXT[route] ?? 'You got out.'),
       // A column; on a phone on its side the post box sits beside the stats (ui.css).
       el('div', 'dp-win-body', [
         el('div', 'dp-win-stats', [
-          stats([
-            ['Difficulty', DIFFICULTY_INFO[difficulty]?.name ?? difficulty],
-            ['Days used', `${days} of ${MAX_DAYS}`],
-            ['Time', formatTime(seconds)],
-            ['Best', record ? formatTime(record) : '—'],
-          ]),
+          stats(rows),
           best ? el('div', 'dp-badge', 'New best time!') : null,
         ]),
         post?.root,
@@ -540,5 +638,12 @@ export function createScreens({
     return endScreen('dp-gameover', parts, 'Back to title');
   }
 
-  return { showTitle, showDayCard, showPause, showWin, showGameOver, openSettings, openHowTo, openLeaderboard };
+  return {
+    showTitle, showDayCard, showPause, showWin, showGameOver, openSettings, openHowTo, openLeaderboard,
+    showLobby: coopScreens.showLobby,
+    showMessage: coopScreens.showMessage,
+    openCoop: coopScreens.openCoop,
+    /** The next title opens straight on Join with this code (what a ?join= link does). */
+    setInviteCode: (code) => (inviteCode = code ? String(code) : null),
+  };
 }

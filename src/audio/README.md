@@ -97,12 +97,41 @@ requests. Entry point: `createAudio({ bus, camera })` in [index.js](index.js).
 | `FOOTSTEP` | `footstep`: sprint is louder and heavier, crouch is nearly silent, `carpet`/`rug` surfaces are duller |
 | `PICKUP` | `pickup` |
 | `LOCK_OPENED` | `unlock` |
+| `KEYPAD_ROLLED` | `keypadClick`: three ratchet ticks and a plastic pip pitched by `digit` |
 | `HIDE` / `UNHIDE` | `rustle` |
 | `LINK_ENTER` | `whoosh` (slide) or `crawl` (tunnel) |
 | `BALL_THROWN` | `whoosh` |
 | `DART_FIRED` | `launch` |
 | `TREAT_DROPPED` | `crinkle` |
 | `PAUSED` | muffles and ducks the whole mix (`RESUMED` restores it) |
+
+**Co-op: the partner's sounds**
+
+- **Whose event is it?** `soundmap.isPartnerPayload(payload, localId)`:
+  - A `playerId` decides: it's the partner's when it isn't the local player's id (`player.id`
+    from `update()`, `'host'` until then).
+  - Without a `playerId`, a replay (`remote: true`) is the partner's.
+  - A solo run never has either, so nothing changes there.
+  - Your own action replayed back by the host (`playerId` = yours) still plays as yours.
+- **The partner's events never play in your head** (`partnerCues`):
+  - An in-head cue moves to `at: 'partner'`. It plays at `payload.pos` (or a dart's `origin`),
+    else at the partner's chest (`ctx.remote`, `partner.chestHeight` up). It's audible to
+    `partner.range` (16 m) and muffled through floors like anything else.
+  - With neither a position nor `ctx.remote`, it stays silent.
+  - This covers `PICKUP`, `HIDE`/`UNHIDE`, `LINK_ENTER`, `KEYPAD_ROLLED`, `LOCK_OPENED`,
+    `BALL_THROWN` and `DART_FIRED`.
+  - Their `FOOTSTEP`s play at the step's `pos` to `partner.footstepRange` (14 m).
+  - Their `NOISE`s are already positional and play as usual.
+- **Kept in your head on purpose** (`partnerAt: null`): the chase stinger, `exitUnlocked`,
+  `windup`, `escapeChime` and `musicBoxDie`. They're music, or a warning that's about both of
+  you.
+- **The partner's `CAUGHT`** barks from Doodle (`partnerAt: 'doodle'`), and it doesn't mute
+  the lullaby, since your run goes on.
+- **Doodle's, doors' and world sounds** replayed from the host keep their own positions.
+- **One listener, the camera.** The heartbeat, the tension and the collar jingle are all
+  measured from it, so they're about what you see and hear. While you're knocked out and
+  watching through the partner's eyes, the listener's floor is theirs (`listenerFloor`), so
+  floor muffling matches the view.
 
 **Cutscenes** (via [cues.js](cues.js)): `thud`, `bark`, `lick`, `growl`, `rustle`, `chew`,
 `jeepEngine` (driving), `crickets`, `gasp`.
@@ -122,6 +151,8 @@ requests. Entry point: `createAudio({ bus, camera })` in [index.js](index.js).
   - Detune depth, wind-down and missed-note chance.
   - Drone level and cutoff.
 - **`footsteps`:** walk, sprint and crouch levels.
+- **`partner`:** how far away the co-op partner's sounds carry (`range`, `footstepRange`), and
+  how high on their body a sound without a position comes from (`chestHeight`).
 - **`pause`:** how much the mix is muffled while paused.
 - **`trim`:** per-voice level trims. To set them:
   1. Render every voice offline: use the dev page's **measure all voices** button, or call
@@ -141,6 +172,9 @@ requests. Entry point: `createAudio({ bus, camera })` in [index.js](index.js).
     near-silence.
   - **fake orbiting Doodle:** set its distance, speed, state and floor to hear the jingle,
     panting, heartbeat and tension respond.
+  - **Co-op → partner sounds:** a fake partner 3 m to your left (`ctx.remote`) walks, picks up,
+    hides, rolls the keypad and so on, replayed with `remote: true`. Compare them with your own
+    `KEYPAD_ROLLED` and `PICKUP`, which still play in your head.
 - **Extras on the returned object** (not in the contract):
   - `play(id, opts)`
   - `voices`

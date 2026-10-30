@@ -1,13 +1,15 @@
 // The Granny-minimal HUD: a center dot that becomes a hand over usable things,
 // the prompt line, the held item, a stamina bar that only shows while not full,
 // lock toasts, and a vignette that closes in when Doodle is near. Prompts are
-// reworded for touch ("Tap: ...") while the input mode is touch.
+// reworded for touch ("Tap: ...") while the input mode is touch. In co-op it
+// shows only the local player: a prompt or hand about the partner is ignored.
 
 import { EVENTS } from '../core/events.js';
 import { approach } from '../audio/curves.js';
 import { el } from './dom.js';
 import { drawHand, drawItemIcon } from './icons.js';
 import { staminaView, vignetteLevel } from './motion.js';
+import { isPartnerPayload } from './coop.js';
 import { EXIT_MESSAGES, LOCK_MESSAGES, itemName, promptFor } from './text.js';
 import { UI_TUNING } from './tuning.js';
 
@@ -32,6 +34,8 @@ export function createHud(layer, bus, { inputMode = () => 'desktop' } = {}) {
   let vig = 0;
   let toastTimer = 0;
   let lastStamina = null;
+  let localId = 'host'; // from update()'s player; a solo run is 'host'
+  const mine = (p) => !isPartnerPayload(p, localId);
 
   let rawPrompt = null; // as Gameplay sent it; reworded when the input mode flips
   function setPrompt(text) {
@@ -65,8 +69,8 @@ export function createHud(layer, bus, { inputMode = () => 'desktop' } = {}) {
     vignette.style.opacity = '0';
   }
 
-  bus.on(EVENTS.PROMPT, ({ text } = {}) => setPrompt(text ?? null));
-  bus.on(EVENTS.HELD, ({ itemId, uses: n } = {}) => setHeld(itemId ?? null, n));
+  bus.on(EVENTS.PROMPT, (p = {}) => mine(p) && setPrompt(p.text ?? null));
+  bus.on(EVENTS.HELD, (p = {}) => mine(p) && setHeld(p.itemId ?? null, p.uses));
   bus.on(EVENTS.LOCK_OPENED, ({ lockId } = {}) => showToast(LOCK_MESSAGES[lockId]));
   bus.on(EVENTS.EXIT_UNLOCKED, ({ route } = {}) => showToast(EXIT_MESSAGES[route]));
   bus.on(EVENTS.RUN_START, reset);
@@ -78,6 +82,7 @@ export function createHud(layer, bus, { inputMode = () => 'desktop' } = {}) {
       hud.classList.toggle('dp-on', !!v);
     },
     update(dt, { player = null, doodle = null } = {}) {
+      if (player?.id) localId = player.id;
       const s = staminaView(player ? player.stamina : 1);
       stamina.classList.toggle('dp-on', s.visible);
       stamina.classList.toggle('dp-low', s.low);

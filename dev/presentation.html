@@ -6,6 +6,8 @@
   Serve the repo root (node tools/serve.mjs 8084, or the presentation-dev
   launch config) and open /dev/presentation.html. Click anywhere once to
   unlock audio. Click the 3D view to look around (WASD, Esc to release).
+  Co-op is on here (the title's "Play with a friend", the Co-op section);
+  ?coop=0 turns it off to check that solo looks as before.
 -->
 <html lang="en">
 <head>
@@ -62,6 +64,8 @@
     import { createAudio } from '../src/audio/index.js';
     import { VOICE_GROUPS } from '../src/audio/synth.js';
     import { NOISE_KINDS, EVENT_SOUNDS } from '../src/audio/soundmap.js';
+    import { createFakeLeaderboard } from '../src/leaderboard/fake.js';
+    import { NET_MESSAGES, inviteLink } from '../src/net/room.js';
 
     const bus = createBus();
     const rng = createRng(1);
@@ -80,7 +84,44 @@
     });
 
     const world = createWorld({ scene, bus, rng: rng.fork('world'), difficulty: 'normal' });
-    const ui = createUI({ root: document.getElementById('ui'), bus });
+    const params = new URLSearchParams(location.search);
+    const coopOn = params.get('coop') !== '0';
+
+    // The fake board plus pretend co-op boards (the real client's co-op side comes from the
+    // coordinator later): top(d, n, {coop}) and submit({..., name2, coop}) keep their own lists.
+    function coopFakeBoard() {
+      const base = createFakeLeaderboard({ latencyMs: 300 });
+      const lists = { shared: { normal: [['AL', 'BO', 612.3, 2, 'garage'], ['MAX', 'IVY', 655.1, 3, 'frontDoor']], hard: [['ACE', 'ZOE', 980, 4, 'garage']] }, knockout: { normal: [['KAI', 'BEA', 540.8, 1, 'frontDoor']] } };
+      let next = 1;
+      for (const rule of Object.keys(lists))
+        for (const d of Object.keys(lists[rule])) lists[rule][d] = lists[rule][d].map(([name, name2, seconds, days, route], k) => ({ id: `co-${rule}-${d}-${k}`, name, name2, seconds, days, route, at: null }));
+      const list = (rule, d) => (lists[rule][d] ??= []);
+      const wait = () => new Promise((r) => setTimeout(r, 300));
+      return {
+        enabled: true,
+        get canSubmit() { return base.canSubmit; },
+        set canSubmit(v) { base.canSubmit = v; },
+        failNext: base.failNext,
+        async top(d, limit = 10, opts) {
+          if (!opts?.coop) return base.top(d, limit);
+          await wait();
+          return [...list(opts.coop, d)].sort((a, b) => a.seconds - b.seconds).slice(0, limit);
+        },
+        async rankOf(d, seconds, opts) {
+          if (!opts?.coop) return base.rankOf(d, seconds);
+          return list(opts.coop, d).filter((e) => e.seconds < seconds).length + 1;
+        },
+        async submit(run) {
+          if (!run.coop) return base.submit(run);
+          await wait();
+          const entry = { id: `co-new-${next++}`, name: run.name, name2: run.name2, seconds: Math.round(run.seconds * 100) / 100, days: run.days, route: run.route, at: new Date().toISOString() };
+          list(run.coop, run.difficulty).push(entry);
+          return { id: entry.id, rank: list(run.coop, run.difficulty).filter((e) => e.seconds < entry.seconds).length + 1, entry };
+        },
+      };
+    }
+    const board = coopFakeBoard();
+    const ui = createUI({ root: document.getElementById('ui'), bus, leaderboard: board, coop: { enabled: coopOn } });
     const gameplay = createGameplay({ scene, camera, canvas: renderer.domElement, world, bus, rng: rng.fork('gameplay'), difficulty: 'normal', settings: ui.settings });
     const doodle = createDoodle({ scene, world, bus, rng: rng.fork('doodle'), difficulty: 'normal' });
     const audio = createAudio({ bus, camera });
@@ -305,6 +346,88 @@
       await cutscenes.playWake({ day: 4 });
     }));
 
+    // ---- co-op ------------------------------------------------------------------------
+    section(coopOn ? 'Co-op' : 'Co-op (off: ?coop=0)');
+    const fakeCode = 'K7MQ2P';
+    // A pretend partner 3 m to your left: their sounds come from here (audio's ctx.remote).
+    const partnerOn = row('fake partner (ctx.remote) 3 m left', check(true));
+    const partner = { id: 'guest', pos: { x: 0, y: 0, z: 0 }, floorId: 'ground', down: false };
+    const placePartner = () => {
+      const p = gameplay.player;
+      partner.pos = { x: p.pos.x - Math.cos(p.yaw) * 3, y: p.pos.y, z: p.pos.z + Math.sin(p.yaw) * 3 };
+      partner.floorId = p.floorId;
+      return partnerOn.checked ? partner : null;
+    };
+    panel.append(h('h4', 'menus'));
+    btn('Co-op menu', () => frozen(() => ui.openCoop()).then((r) => log('co-op menu →', JSON.stringify(r))));
+    btn(`Invite link (${fakeCode})`, () => {
+      ui.setInviteCode(fakeCode);
+      frozen(() => ui.showTitle()).then((r) => log('title →', JSON.stringify(r)));
+    });
+    btn('Lobby (host)', () => frozen(async () => {
+      const lobby = ui.showLobby({ role: 'host', code: fakeCode, link: inviteLink(location, fakeCode), name: 'AL', partnerName: null, difficulty: 'normal', rule: 'knockout' });
+      const t = setTimeout(() => lobby.update({ partnerName: 'BO' }), 2500);
+      const r = await lobby.result;
+      clearTimeout(t);
+      log('lobby (host) →', r);
+    }));
+    btn('Lobby (guest)', () => frozen(async () => {
+      const lobby = ui.showLobby({ role: 'guest', code: fakeCode, link: '', name: 'BO', partnerName: 'AL', difficulty: 'hard', rule: 'shared' });
+      const t = setTimeout(() => lobby.update({ status: 'AL is starting…' }), 3000);
+      // main.js closes it when the host starts; close() leaves `result` unsettled, so race it.
+      const started = new Promise((r) => setTimeout(() => r('closed by main.js (host started)'), 5000));
+      const t2 = setTimeout(() => lobby.close(), 5000);
+      log('lobby (guest) →', await Promise.race([lobby.result, started]));
+      clearTimeout(t);
+      clearTimeout(t2);
+    }));
+    btn('Lobby (host, friend leaves)', () => frozen(async () => {
+      const lobby = ui.showLobby({ role: 'host', code: fakeCode, link: inviteLink(location, fakeCode), name: 'AL', partnerName: 'BO', difficulty: 'easy', rule: 'shared' });
+      setTimeout(() => lobby.update({ partnerName: null, status: 'BO left. Waiting for your friend…' }), 2000);
+      log('lobby →', await lobby.result);
+    }));
+    btn('Message', () => frozen(() => ui.showMessage(NET_MESSAGES.notFound)).then(() => log('message OK')));
+    panel.append(h('h4', 'notices (events main.js emits)'));
+    btn('PARTNER_JOINED BO', () => bus.emit(EVENTS.PARTNER_JOINED, { name: 'BO' }));
+    btn('PARTNER_LEFT', () => bus.emit(EVENTS.PARTNER_LEFT, { name: 'BO', reason: 'left' }));
+    btn('PARTNER_LEFT timeout', () => bus.emit(EVENTS.PARTNER_LEFT, { name: 'BO', reason: 'timeout' }));
+    btn('PLAYER_DOWN partner', () => bus.emit(EVENTS.PLAYER_DOWN, { playerId: 'guest', local: false, name: 'BO' }));
+    btn('PLAYER_DOWN me (spectate)', () => bus.emit(EVENTS.PLAYER_DOWN, { playerId: 'host', local: true, name: 'AL' }));
+    btn('PLAYER_UP me', () => bus.emit(EVENTS.PLAYER_UP, { playerId: 'host', local: true }));
+    btn('NET_STATUS waiting', () => bus.emit(EVENTS.NET_STATUS, { status: 'waiting', lagMs: 2400 }));
+    btn('NET_STATUS ok', () => bus.emit(EVENTS.NET_STATUS, { status: 'ok', lagMs: 85 + Math.round(Math.random() * 60) }));
+    panel.append(h('h4', 'screens'));
+    const coopWin = (canPost) => frozen(async () => {
+      await ui.showWin({ route: 'garage', days: 2, seconds: 498.4, difficulty: 'normal', best: false, coop: { rule: 'knockout', names: ['AL', 'BO'], canPost } });
+    }).then(() => log('co-op win done'));
+    btn('Win (co-op host)', () => coopWin(true));
+    btn('Win (co-op guest)', () => coopWin(false));
+    btn('Leaderboard', () => frozen(() => ui.openLeaderboard('normal')));
+    btn('Catch (knock-out)', () => frozen(async () => {
+      near();
+      bus.emit(EVENTS.CAUGHT, { how: 'tackle' });
+      await cutscenes.playCatch({ ...ctx(), knockout: true });
+      bus.emit(EVENTS.PLAYER_DOWN, { playerId: 'host', local: true, name: 'AL' });
+    }).then(() => log('knock-out catch done (no fade)')));
+    panel.append(h('h4', 'partner sounds (3 m left; replayed with remote: true)'));
+    const at = () => ({ pos: { ...placePartner()?.pos ?? partner.pos }, floorId: gameplay.player.floorId });
+    const replay = (type, payload) => bus.emit(type, { ...payload, playerId: 'guest', remote: true });
+    btn('partner walks', async () => {
+      for (let k = 0; k < 8; k++) {
+        replay(EVENTS.FOOTSTEP, { ...at(), surface: 'wood', sprint: false, crouch: false });
+        await new Promise((r) => setTimeout(r, 420));
+      }
+    });
+    btn('PICKUP', () => replay(EVENTS.PICKUP, { itemId: 'hammer', ...at() }));
+    btn('PICKUP (no pos: from ctx.remote)', () => replay(EVENTS.PICKUP, { itemId: 'hammer' }));
+    btn('HIDE', () => replay(EVENTS.HIDE, { spotId: 'x', ...at() }));
+    btn('KEYPAD_ROLLED', () => replay(EVENTS.KEYPAD_ROLLED, { index: 0, digit: Math.floor(Math.random() * 10), ...at() }));
+    btn('LOCK_OPENED', () => replay(EVENTS.LOCK_OPENED, { lockId: 'padlock' }));
+    btn('LINK_ENTER slide', () => replay(EVENTS.LINK_ENTER, { linkId: 'slide', kind: 'slide' }));
+    panel.append(h('h4', 'your own (in your head, as before)'));
+    btn('KEYPAD_ROLLED (mine)', () => bus.emit(EVENTS.KEYPAD_ROLLED, { index: 0, digit: Math.floor(Math.random() * 10) }));
+    btn('PICKUP (mine)', () => bus.emit(EVENTS.PICKUP, { itemId: 'hammer' }));
+
     section('Log');
     panel.append(logBox);
 
@@ -319,14 +442,14 @@
       doodle.update(dt, gameplay.player);
       world.update(dt, gameplay.player.pos);
       const d = activeDoodle();
-      audio.update(dt, { camera, player: gameplay.player, doodle: d, world });
+      audio.update(dt, { camera, player: gameplay.player, doodle: d, world, remote: placePartner() });
       ui.update(dt, { player: gameplay.player, doodle: d });
       renderer.render(scene, camera);
       const s = audio.state;
       const p = gameplay.player;
       info.textContent = `${p.floorId} (${p.pos.x.toFixed(1)}, ${p.pos.y.toFixed(1)}, ${p.pos.z.toFixed(1)})  audio ${s.context}  tension ${s.tension.toFixed(2)}  heart ${s.heart.toFixed(2)}  doodle ${d?.state} ${s.doodle ? `${s.doodle.dist.toFixed(1)} m, ${s.doodle.floors} floors` : ''}`;
     });
-    window.__dev = { THREE, bus, world, gameplay, doodle, ui, audio, cutscenes, scene, camera, fake };
+    window.__dev = { THREE, bus, world, gameplay, doodle, ui, audio, cutscenes, scene, camera, fake, board, partner };
   </script>
 </body>
 </html>

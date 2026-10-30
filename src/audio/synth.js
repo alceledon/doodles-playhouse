@@ -664,6 +664,15 @@ export const VOICES = {
     return 0.3;
   },
 
+  /** A keypad dial clicking round to the next crayon color: ratchet ticks, then a plastic pip pitched by digit. */
+  keypadClick(v, o = {}) {
+    const t = v.t;
+    const digit = Number.isFinite(o.digit) ? clamp(o.digit, 0, 9) : 4;
+    for (let k = 0; k < 3; k++) hiss(v, { t: t + k * 0.028, a: 0.001, d: 0.008, peak: 0.16 - k * 0.03, f: 3400 + k * 300, Q: 3 });
+    blip(v, { type: 'triangle', f: 660 * 2 ** (digit / 12), t: t + 0.09, a: 0.002, d: 0.07, peak: 0.12 });
+    return 0.25;
+  },
+
   pickup(v) {
     hiss(v, { a: 0.01, d: 0.12, peak: 0.12, f: 2500, Q: 0.7 });
     blip(v, { f: 1300, f2: 1500, t: v.t + 0.05, a: 0.002, d: 0.04, peak: 0.08 });
@@ -744,5 +753,5 @@ export const VOICE_GROUPS = Object.freeze({
   doodle: ['jingle', 'pant', 'growl', 'bark', 'barkSting', 'snore', 'sniff', 'yawn', 'huff', 'yelp', 'chew', 'munch', 'lick'],
   music: ['chaseStinger', 'heartbeat', 'musicNote', 'toll', 'windup', 'musicBoxDie', 'escapeChime', 'exitUnlocked', 'crickets'],
   world: ['doorCreak', 'doorLatch', 'drawer', 'lidCreak', 'squeak', 'plankCreak', 'toyPiano', 'blockClatter', 'ballPitSplash', 'jeepEngine', 'ballBounce', 'dartPop', 'dropThud', 'thump', 'tvStatic'],
-  player: ['footstep', 'pickup', 'unlock', 'rustle', 'whoosh', 'crawl', 'crinkle', 'launch', 'thud', 'gasp'],
+  player: ['footstep', 'pickup', 'unlock', 'keypadClick', 'rustle', 'whoosh', 'crawl', 'crinkle', 'launch', 'thud', 'gasp'],
 });

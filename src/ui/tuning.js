@@ -9,6 +9,7 @@ export const UI_TUNING = Object.freeze({
 
   dayCard: Object.freeze({ fadeIn: 0.5, hold: 1.8, fadeOut: 0.45 }),
   toastSeconds: 2.8,
+  noticeSeconds: 3.4, // co-op notices ("BO joined", "Doodle caught BO!")
   screenFade: 0.25, // menus fading in/out
 
   hud: Object.freeze({

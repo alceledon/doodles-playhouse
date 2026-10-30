@@ -4,6 +4,7 @@
 // the camera and Doodle model are put back how they were found.
 //
 //   playCatch     knocked to the floor → Doodle pounces into frame and barks → licks → fade
+//                 (co-op knock-out: no fade, the view goes over to the partner after the licks)
 //   playGameOver  knocked down → dragged off toward the kennel → "Doodle has a new chew toy."
 //   playEscape    walk (or drive) out through the exit into the night
 //   playWake      eyes opening from the bottom bunk
@@ -308,8 +309,9 @@ export function createCutscenes({ camera, getScene, ui }) {
         aim(offset(f.land, { x: 0, y: jolt * 0.03, z: 0 }), f.faceAt(root, f.lean), T.roll + jolt * 0.12);
       });
 
-      // 4. Fade to black (the day card takes over, already black).
-      await fadeTo(black, T.fade);
+      // 4. Fade to black (the day card takes over, already black). Under knock-out the run
+      // goes on through the partner's eyes, so it ends on the lick instead.
+      if (!ctx.knockout) await fadeTo(black, T.fade);
     } finally {
       slobber.remove();
       flash.remove();
