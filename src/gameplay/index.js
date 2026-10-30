@@ -3,22 +3,32 @@
 // held-item view model into the Gameplay object from contracts.js.
 //
 //   rules.js       what everything means (pure, tested)
-//   ../player/     input, movement, camera, hiding, slides and tunnels, touch controls
+//   ../player/     input, movement, camera, hiding, slides and tunnels, touch controls,
+//                  and in co-op the partner (remote.js) and their avatar (avatar.js)
 //   view.js        meshes for items, lock hardware, code digits, traps, ball, darts
 //   viewmodel.js   the item in your hand
+//
+// Co-op (`coop: {role, rule}`, docs/CONTRACTS.md "Co-op"): the host runs every
+// rule for both players; the guest mirrors the host's snapshots and sends its
+// clicks as intents. See README.md for both formats.
 
 import * as THREE from 'three';
 import { EVENTS } from '../core/events.js';
-import { ITEM_IDS, SETTINGS_DEFAULTS, STOREY_HEIGHT } from '../core/contracts.js';
-import { copy, dist2D } from '../core/math.js';
+import { ITEM_IDS, ITEMS, LOCKS, SETTINGS_DEFAULTS, STOREY_HEIGHT } from '../core/contracts.js';
+import { copy } from '../core/math.js';
 import { circleHitsAny } from '../player/movement.js';
 import { createPlayerController } from '../player/controller.js';
 import { createTouchControls } from '../player/touch.js';
+import { createRemotePlayer, makePose } from '../player/remote.js';
+import { createAvatar } from '../player/avatar.js';
 import { tuningFor } from './tuning.js';
-import { createRules } from './rules.js';
+import { createRules, wakeSpot } from './rules.js';
 import { firstBoxHit, isOccluded } from './raycast.js';
 import { createGameplayView } from './view.js';
 import { createViewModel } from './viewmodel.js';
+
+/** How long a guest's prompt shows "…" waiting for the host before giving up. */
+const PENDING_SECONDS = 3;
 
 const taggedAncestor = (o) => {
   for (let n = o; n; n = n.parent) if (n.userData?.interact) return n;
@@ -30,12 +40,17 @@ const visibleDeep = (o) => {
 };
 const sameTarget = (a, b) => a === b || (!!a && !!b && a.kind === b.kind && a.id === b.id && a.dial === b.dial);
 
-/** createGameplay({ scene, camera, canvas, world, bus, rng, difficulty, settings }) → Gameplay */
-export function createGameplay({ scene, camera, canvas, world, bus, rng, difficulty = 'normal', settings = SETTINGS_DEFAULTS }) {
+/** createGameplay({ scene, camera, canvas, world, bus, rng, difficulty, settings, coop? }) → Gameplay */
+export function createGameplay({ scene, camera, canvas, world, bus, rng, difficulty = 'normal', settings = SETTINGS_DEFAULTS, coop = null }) {
   const tuning = tuningFor(difficulty);
   const debugKeys = typeof location !== 'undefined' && new URLSearchParams(location.search).has('debug');
-  const rules = createRules({ world, bus, rng, difficulty, tuning });
+  const role = coop ? (coop.role === 'guest' ? 'guest' : 'host') : null;
+  const isGuest = role === 'guest';
+  const localId = role ?? 'host';
+  const partnerId = localId === 'host' ? 'guest' : 'host';
+  const rules = createRules({ world, bus, rng, difficulty, tuning, coop: role ? { role, rule: coop.rule } : null });
   const garageDoor = rules.locks.garageDoor();
+  const bed = wakeSpot(world, localId);
 
   const controller = createPlayerController({
     camera, canvas, world, bus, tuning, settings: { ...SETTINGS_DEFAULTS, ...settings },
@@ -46,6 +61,8 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     onSecondary: secondary,
     onDrop: dropHeld,
     onKey: debugKey,
+    id: localId,
+    start: bed,
   });
   const player = controller.player;
   const view = createGameplayView({ scene, camera, world, rules, tuning, bus });
@@ -65,6 +82,13 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     },
   });
 
+  // ---- the co-op partner ---------------------------------------------------------------
+  const partner = role ? createRemotePlayer({ world, tuning, id: partnerId, heldItemId: () => rules.items.heldItemId(partnerId) }) : null;
+  const remote = partner?.player ?? null;
+  const avatar = role ? createAvatar({ scene, kit: view.kit, tuning, role: partnerId }) : null;
+  const partnerHere = () => !!partner?.isPresent();
+  rules.setBodies(() => (partnerHere() ? [player, remote] : [player]));
+
   // ---- what you're looking at -----------------------------------------------------
   const raycaster = new THREE.Raycaster();
   const rayO = new THREE.Vector3();
@@ -72,7 +96,7 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
   let target = null;
 
   function findTarget() {
-    if (player.hidden || controller.isRiding()) return null;
+    if (player.hidden || player.down || controller.isRiding()) return null;
     return targetAlong(player.eyePos(), controller.forward());
   }
 
@@ -108,7 +132,7 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
   const tapNdc = new THREE.Vector2();
   /** Tap at client (x, y): interact with what's under it if it's in reach. Returns true if it did something. */
   function tapAt(x, y) {
-    if (!controller.isEnabled() || controller.isRiding()) return false;
+    if (!controller.isEnabled() || controller.isRiding() || player.down) return false;
     if (player.hidden) {
       controller.unhide(); // like a click while hidden: the prompt says "Tap: stop hiding"
       return true;
@@ -120,7 +144,7 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     tapCaster.setFromCamera(tapNdc, camera);
     const hit = targetAlong(tapCaster.ray.origin, tapCaster.ray.direction);
     if (!hit) return false;
-    handle(rules.interact(hit, player));
+    act('primary', hit);
     return true;
   }
 
@@ -145,23 +169,65 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
   function updatePrompt(dt) {
     if (messageLeft > 0 && !sameTarget(target, messageTarget)) messageLeft = 0;
     messageLeft -= dt;
+    if (pending) return setPrompt('…');
     if (messageLeft > 0) return setPrompt(message);
     if (player.hidden) return setPrompt('Click: stop hiding');
     if (controller.isRiding()) return setPrompt(null);
     setPrompt(rules.describe(target, player));
   }
 
+  // ---- co-op guest: intents ------------------------------------------------------------
+  let intentSink = null;
+  let intentCount = 0;
+  let pending = null; // {n, left}: an intent the host hasn't answered yet
+  let answered = 0; // the last intent number whose answer we've shown
+
+  /** What the host needs to run an action for this body (see README: intents). */
+  function intentBody() {
+    const eye = player.eyePos();
+    const dir = controller.forward();
+    return {
+      pos: copy(player.pos),
+      floorId: player.floorId,
+      crouched: player.crouched,
+      eye,
+      dir,
+      drop: floorAhead(0.45),
+      treat: floorAhead(0.6),
+      range: dartRange(eye, dir),
+    };
+  }
+
+  function sendIntent(kind, t) {
+    if (!intentSink) return;
+    const n = ++intentCount;
+    pending = { n, left: PENDING_SECONDS };
+    intentSink({ n, kind, target: t ? { kind: t.kind, id: t.id, ...(t.dial != null ? { dial: t.dial } : {}) } : null, body: intentBody() });
+  }
+
   // ---- actions ----------------------------------------------------------------------------
   function primary() {
-    if (!controller.isEnabled()) return;
+    if (!controller.isEnabled() || player.down) return;
     if (player.hidden) return controller.unhide();
     if (controller.isRiding()) return;
-    handle(rules.interact(target ?? findTarget(), player));
+    act('primary', target ?? findTarget());
   }
 
   function secondary() {
-    if (!controller.isEnabled() || player.hidden || controller.isRiding()) return;
-    handle(rules.useHeld(target ?? findTarget(), player));
+    if (!controller.isEnabled() || player.hidden || player.down || controller.isRiding()) return;
+    act('secondary', target ?? findTarget());
+  }
+
+  /** Run a click here, or (co-op guest) send it to the host when it changes shared state. */
+  function act(kind, t) {
+    if (isGuest && rules.needsHost(kind, t, player)) {
+      // A throw, shot or treat shows in your hand at once; the host's answer follows.
+      const own = kind === 'secondary' && !rules.acceptsHeld(t, player) && !(t?.kind === 'lock' && t.id === LOCKS.KEYPAD);
+      const anim = { [ITEMS.TENNIS_BALL]: 'throw', [ITEMS.LAUNCHER]: 'fire', [ITEMS.TREATS]: 'drop' }[rules.items.heldItemId()];
+      if (own && anim) viewModel.play(anim);
+      return sendIntent(kind, t);
+    }
+    handle(kind === 'secondary' ? rules.useHeld(t, player) : rules.interact(t, player));
   }
 
   function handle(result) {
@@ -204,8 +270,24 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     return { pos: { x, y: g.y, z }, floorId: g.floorId };
   }
 
+  /** How far a dart from the eye flies before the first wall, floor or ceiling. */
+  function dartRange(eye, dir) {
+    let range = tuning.dart.range;
+    const wall = firstBoxHit(eye, dir, controller.boxesAround(player.pos.y, 2.6, eye.x, eye.z, range), range);
+    if (wall) range = wall.t;
+    // Floors and ceilings aren't boxes: stop at those planes too.
+    const floor = player.pos.y;
+    if (dir.y < -1e-3) range = Math.min(range, (eye.y - floor) / -dir.y);
+    if (dir.y > 1e-3) range = Math.min(range, (floor + STOREY_HEIGHT - 0.1 - eye.y) / dir.y);
+    return range;
+  }
+
   function dropHeld() {
-    if (!controller.isEnabled() || player.hidden || controller.isRiding() || !rules.items.held()) return;
+    if (!controller.isEnabled() || player.hidden || player.down || controller.isRiding() || !rules.items.held()) return;
+    if (isGuest) {
+      viewModel.play('drop');
+      return sendIntent('drop', null);
+    }
     const { pos, floorId } = floorAhead(0.45);
     rules.drop(pos, floorId);
     viewModel.play('drop');
@@ -218,30 +300,13 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
   }
 
   function throwBall() {
-    const eye = player.eyePos();
-    const f = controller.forward();
-    const inst = rules.throwBall(copy(player.pos), player.floorId);
-    if (!inst) return;
-    const s = tuning.ball.throwSpeed;
-    const origin = { x: eye.x + f.x * 0.2, y: eye.y - 0.08 + f.y * 0.2, z: eye.z + f.z * 0.2 };
-    view.throwBall(inst, origin, { x: f.x * s, y: f.y * s + tuning.ball.lift, z: f.z * s }, player.floorId);
-    viewModel.play('throw');
+    if (rules.perform('throw', { pos: copy(player.pos), floorId: player.floorId, eye: player.eyePos(), dir: controller.forward() })) viewModel.play('throw');
   }
 
   function fireDart() {
     const eye = player.eyePos();
     const dir = controller.forward();
-    let range = tuning.dart.range;
-    const wall = firstBoxHit(eye, dir, controller.boxesAround(player.pos.y, 2.6, eye.x, eye.z, range), range);
-    if (wall) range = wall.t;
-    // Floors and ceilings aren't boxes: stop at those planes too.
-    const floor = player.pos.y;
-    if (dir.y < -1e-3) range = Math.min(range, (eye.y - floor) / -dir.y);
-    if (dir.y > 1e-3) range = Math.min(range, (floor + STOREY_HEIGHT - 0.1 - eye.y) / dir.y);
-    const firedAt = performance.now();
-    if (!rules.fireDart(eye, dir, range, player.floorId)) return;
-    view.fireDart(eye, dir, range, player.floorId, firedAt);
-    viewModel.play('fire');
+    if (rules.fireDart(eye, dir, dartRange(eye, dir), player.floorId)) viewModel.play('fire');
   }
 
   function debugKey(code) {
@@ -255,47 +320,68 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     else if (code === 'KeyL') rules.openAll();
   }
 
-  // ---- escape on foot through an open front door -------------------------------------------
-  function checkWalkOut() {
-    const door = rules.locks.frontDoor();
-    if (!door?.isOpen || player.floorId !== door.floorId) return;
-    const exit = world.anchors.frontDoor.exit.pos;
-    if (dist2D(player.pos, exit) < dist2D(door.pos, exit) - 0.3) rules.escape('frontDoor');
+  /** Feet on the floor under a body (a caught player's item lands here). */
+  function feetOf(p) {
+    const g = world.heightAt(p.pos.x, p.pos.z, p.floorId);
+    return { pos: { x: p.pos.x, y: g.y, z: p.pos.z }, floorId: g.floorId };
   }
 
   // ---- per frame -----------------------------------------------------------------------------
   function update(dt) {
     // World-side motion (ball, darts, falling locks) carries on during cutscenes.
+    rules.update(dt);
     view.update(dt);
+    if (partner) {
+      partner.update(dt);
+      avatar.update(dt, remote, partnerHere());
+      // The host runs the partner's body too, even while its own player is frozen or spectating.
+      if (!isGuest && partnerHere() && !remote.down && !remote.hidden && !remote.onLink) {
+        const fired = rules.updateTraps(remote);
+        if (fired.length) view.trapsFired(fired);
+        rules.walkOut(remote);
+      }
+    }
+    if (pending && (pending.left -= dt) <= 0) pending = null;
     if (!controller.isEnabled()) {
       viewModel.update(dt, rules.items.heldItemId(), false);
       return;
     }
     controller.update(dt);
-    if (!player.hidden && !controller.isRiding()) {
+    if (!player.hidden && !player.down && !controller.isRiding()) {
       const fired = rules.updateTraps(player);
       if (fired.length) view.trapsFired(fired);
-      checkWalkOut();
+      rules.walkOut(player);
     }
     target = findTarget();
     updatePrompt(dt);
-    viewModel.update(dt, rules.items.heldItemId(), !player.hidden, controller.bob());
+    viewModel.update(dt, rules.items.heldItemId(), !player.hidden && !player.down, controller.bob());
     touch.update();
   }
 
   function startDay() {
-    controller.wake(world.anchors.startBed);
-    rules.startDay();
+    controller.wake(bed);
+    // The host keeps traps under the guest's bed quiet too.
+    const guestBed = role === 'host' ? wakeSpot(world, 'guest') : null;
+    rules.startDay(guestBed ? [{ pos: guestBed.pos, floorId: guestBed.floorId, playerId: 'guest' }] : []);
     view.resetDay();
     target = null;
     messageLeft = 0;
+    pending = null;
     setPrompt(null);
   }
 
-  function onCaught() {
+  /** Caught: the player's held item falls where they were. In co-op the host also does this for the guest. */
+  function onCaught(playerId = localId) {
+    if (playerId !== localId) {
+      if (remote && !isGuest) {
+        const at = feetOf(remote);
+        rules.onCaught(at.pos, at.floorId, playerId);
+      }
+      return;
+    }
     // The held item falls where you were (in front of the hide spot if you were pulled out).
-    const g = world.heightAt(player.pos.x, player.pos.z, player.floorId);
-    rules.onCaught({ x: player.pos.x, y: g.y, z: player.pos.z }, g.floorId);
+    const at = feetOf(player);
+    rules.onCaught(at.pos, at.floorId);
     if (player.hidden) controller.unhide();
     controller.cancelRide();
   }
@@ -309,10 +395,40 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     }
   }
 
+  // ---- co-op hooks ---------------------------------------------------------------------------
+  /** Knock-out: a down player can't act and drops what they held (the host drops it, for either). */
+  function setDown(playerId, down) {
+    const isLocal = playerId === localId;
+    const body = isLocal ? player : remote;
+    if (!body) return;
+    if (down) onCaught(playerId);
+    if (isLocal) {
+      player.down = !!down;
+      if (down) {
+        pending = null;
+        setPrompt(null);
+      }
+    } else partner.setDown(down);
+  }
+
+  function applySnapshot(snap) {
+    const before = rules.items.held();
+    const changed = rules.applySnapshot(snap);
+    const after = rules.items.held();
+    if (after && after !== before) viewModel.play('pickup');
+    const answer = rules.answer(localId);
+    if (answer && answer.n > answered) {
+      answered = answer.n;
+      if (pending && answer.n >= pending.n) pending = null;
+      if (answer.say) showMessage(answer.say);
+    }
+    return changed;
+  }
+
   const debug = {
     giveItem(id) {
-      const g = world.heightAt(player.pos.x, player.pos.z, player.floorId);
-      rules.giveItem(id, { x: player.pos.x, y: g.y, z: player.pos.z }, g.floorId);
+      const at = feetOf(player);
+      rules.giveItem(id, at.pos, at.floorId);
     },
     setNoclip: (on) => controller.setNoclip(on),
     teleport(pos, floorId) {
@@ -324,6 +440,8 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     rules,
     controller,
     view,
+    partner,
+    avatar,
     /** Face a point (or set yaw/pitch directly). */
     lookAt(p) {
       const eye = player.eyePos();
@@ -339,8 +457,12 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     touch,
   };
 
-  return {
+  const gameplay = {
     player,
+    /** co-op: the partner while they're here (null solo, before their first pose, and after they leave) */
+    get remote() {
+      return partnerHere() ? remote : null;
+    },
     update,
     startDay,
     onCaught,
@@ -348,6 +470,7 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     requestPointerLock: () => controller.requestPointerLock(),
     exitPointerLock: () => controller.exitPointerLock(),
     dispose() {
+      avatar?.dispose();
       touch.dispose();
       controller.dispose();
       viewModel.dispose();
@@ -355,5 +478,23 @@ export function createGameplay({ scene, camera, canvas, world, bus, rng, difficu
     },
     debug,
   };
+  if (role) {
+    Object.assign(gameplay, {
+      pose: () => makePose({ ...player, held: rules.items.heldItemId(), onLink: !!player.onLink }),
+      setRemotePose: (pose) => partner.setPose(pose),
+      setDown,
+    });
+    if (isGuest)
+      Object.assign(gameplay, {
+        applySnapshot,
+        setIntentSink: (fn) => (intentSink = typeof fn === 'function' ? fn : null),
+      });
+    else
+      Object.assign(gameplay, {
+        snapshot: () => rules.snapshot(),
+        // Before the guest's first pose lands the intent's own body is all there is to go on.
+        applyIntent: (playerId, intent) => rules.applyIntent(playerId, intent, partnerHere() ? remote : null),
+      });
+  }
+  return gameplay;
 }
-

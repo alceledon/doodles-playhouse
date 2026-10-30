@@ -39,42 +39,63 @@ export function trapLoudness(kind, crouched, tuning) {
  * @param {Object[]} spots  the active trap spots (placeTraps().all)
  */
 export function createTrapTriggers(spots, tuning) {
-  const states = spots.map((spot) => ({ spot, armed: true, toppled: false }));
+  // Arming is per body (co-op: one player stepping off doesn't re-arm a toy the other stands on);
+  // a toppled tower is toppled for everyone. A body not seen yet starts armed.
+  const states = spots.map((spot) => ({ spot, unarmed: new Set(), toppled: false }));
   const enterR = (s) => s.radius + PLAYER_BODY.radius * 0.6;
   const leaveR = (s) => s.radius + PLAYER_BODY.radius + 0.3;
 
   /**
-   * Call every frame with the player's feet.
+   * Call every frame with a player's feet.
    * @returns {{spot: Object, loudness: number}[]} traps that went off this frame
    */
-  function update(pos, floorId, { crouched = false } = {}) {
+  function update(pos, floorId, { crouched = false, playerId = 'host' } = {}) {
     const out = [];
     for (const st of states) {
       const s = st.spot;
       const sameFloor = s.floorId === floorId && Math.abs(pos.y - s.pos.y) < 0.9;
       const d = sameFloor ? dist2D(pos, s.pos) : Infinity;
-      if (d > leaveR(s)) st.armed = true;
-      if (!st.armed || st.toppled || d >= enterR(s)) continue;
+      if (d > leaveR(s)) st.unarmed.delete(playerId);
+      if (st.unarmed.has(playerId) || st.toppled || d >= enterR(s)) continue;
       if (s.kind === 'piano' && crouched) continue; // creeping past doesn't bump it
-      st.armed = false;
+      st.unarmed.add(playerId);
       if (s.kind === 'blocks') st.toppled = true;
       out.push({ spot: s, loudness: trapLoudness(s.kind, crouched, tuning) });
     }
     return out;
   }
 
-  /** Start of a day: towers rebuilt, everything armed (except what you wake up standing on). */
-  function rearm(pos = null, floorId = null) {
+  /**
+   * Start of a day: towers rebuilt, everything armed, except what someone wakes up standing on.
+   * `pos, floorId` is the host's bed; `others` adds more beds as [{pos, floorId, playerId}].
+   */
+  function rearm(pos = null, floorId = null, others = []) {
+    const beds = [...(pos ? [{ pos, floorId, playerId: 'host' }] : []), ...others];
     for (const st of states) {
       st.toppled = false;
-      st.armed = !(pos && st.spot.floorId === floorId && dist2D(pos, st.spot.pos) <= leaveR(st.spot));
+      st.unarmed.clear();
+      for (const b of beds) if (st.spot.floorId === b.floorId && dist2D(b.pos, st.spot.pos) <= leaveR(st.spot)) st.unarmed.add(b.playerId);
     }
+  }
+
+  /** Co-op mirror: which towers are down (arming stays the host's business). */
+  function setToppled(ids) {
+    const down = new Set(ids);
+    let changed = false;
+    for (const st of states) {
+      const t = down.has(st.spot.id);
+      if (st.toppled !== t) changed = true;
+      st.toppled = t;
+    }
+    return changed;
   }
 
   return {
     update,
     rearm,
+    setToppled,
     isToppled: (id) => states.find((st) => st.spot.id === id)?.toppled ?? false,
+    toppled: () => states.filter((st) => st.toppled).map((st) => st.spot.id),
     spots: () => states.map((st) => st.spot),
   };
 }

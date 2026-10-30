@@ -2,7 +2,9 @@
 // frame: item meshes (and their invisible hit proxies), the padlock, plank
 // and keypad dials on the front door, the crayon code digits on the
 // drawings, squeaky toys and block towers, dropped treats, the flying ball
-// and darts, and the fuse box / opener lights.
+// and darts, and the fuse box / opener lights. The ball and darts fly in the
+// rules (rules.js simulates them on the host; a co-op guest gets them in
+// snapshots); this only draws them.
 //
 // Proxies carry userData.interact like World's meshes, so the interaction
 // raycast treats both the same way.
@@ -12,7 +14,6 @@ import { ITEMS, LOCKS } from '../core/contracts.js';
 import { EVENTS } from '../core/events.js';
 import { copy } from '../core/math.js';
 import { createRng } from '../core/rng.js';
-import { BALL_RADIUS, createBall, stepBall } from './ball.js';
 import { DIAL_COLORS } from './keypad.js';
 import { createModelKit } from './models.js';
 import { crayonDigitTexture } from './textures.js';
@@ -33,7 +34,6 @@ export function createGameplayView({ scene, camera, world, rules, tuning, bus })
   root.name = 'gameplay';
   scene.add(root);
   const perRun = []; // textures/materials made for this run only
-  const floorY = Object.fromEntries(world.floors.map((f) => [f.id, f.y]));
   const { anchors } = world;
   const cosmetic = createRng('gameplay-view'); // looks only; never the run's rng
 
@@ -94,95 +94,72 @@ export function createGameplayView({ scene, camera, world, rules, tuning, bus })
     return v;
   }
 
-  function syncItems() {
+  // A co-op guest hears about a flying ball ~10 times a second: ease toward it.
+  const smooth = rules.localId === 'guest';
+  const flyingAt = new THREE.Vector3();
+
+  function syncItems(dt) {
+    const seen = new Set();
     for (const inst of rules.items.list()) {
+      seen.add(inst.id);
       const v = itemView(inst);
       const inWorld = inst.where === 'world';
-      v.group.visible = inst.where === 'flying' || (inWorld && rules.containerOpen(inst.containerId));
+      const flying = inst.where === 'flying';
+      v.group.visible = flying || (inWorld && rules.containerOpen(inst.containerId));
       v.proxy.userData.active = inWorld && rules.canPickUp(inst);
       if (inWorld) {
         v.group.position.set(inst.pos.x, inst.pos.y, inst.pos.z);
         v.group.rotation.set(0, inst.rotY ?? 0, 0);
+      } else if (flying) {
+        const p = v.group.position;
+        const k = smooth && v.flying ? Math.min(1, dt * 14) : 1;
+        flyingAt.set(inst.pos.x, inst.pos.y, inst.pos.z);
+        const dx = (flyingAt.x - p.x) * k;
+        const dz = (flyingAt.z - p.z) * k;
+        p.lerp(flyingAt, k);
+        if (v.flying) {
+          // Roll the way it's going.
+          v.group.rotation.x += dz * 25;
+          v.group.rotation.z -= dx * 25;
+        }
       }
+      v.flying = flying;
     }
+    // Instances a co-op snapshot took away.
+    for (const [id, v] of itemViews)
+      if (!seen.has(id)) {
+        root.remove(v.group);
+        const t = targets.indexOf(v.proxy);
+        if (t >= 0) targets.splice(t, 1);
+        itemViews.delete(id);
+      }
   }
 
-  // ---- the tennis ball in flight ---------------------------------------------------
-  const flights = [];
-  const ballEnv = {
-    boxes: (floorId) => world.colliders(floorId),
-    heightAt: world.heightAt,
-    floorY: (id) => floorY[id] ?? 0,
-  };
+  // ---- darts ----------------------------------------------------------------------------
+  const dartViews = new Map(); // rules dart id → mesh
 
-  function throwBall(inst, origin, vel, floorId) {
-    flights.push({ inst, ball: createBall(origin, vel, floorId) });
-  }
-
-  function updateFlights(dt) {
-    for (let k = flights.length - 1; k >= 0; k--) {
-      const { inst, ball } = flights[k];
-      if (inst.where !== 'flying') {
-        flights.splice(k, 1);
-        continue;
+  function syncDarts() {
+    const live = new Set();
+    for (const d of rules.darts) {
+      live.add(d.id);
+      let mesh = dartViews.get(d.id);
+      if (!mesh) {
+        mesh = kit.dart();
+        mesh.scale.setScalar(1.4);
+        mesh.position.set(d.origin.x, d.origin.y, d.origin.z);
+        // Object3D.lookAt points +Z at the target; the model's nose is -Z.
+        mesh.lookAt(d.origin.x - d.dir.x, d.origin.y - d.dir.y, d.origin.z - d.dir.z);
+        root.add(mesh);
+        dartViews.set(d.id, mesh);
       }
-      const impacts = stepBall(ball, dt, ballEnv, tuning.ball);
-      if (impacts.length) rules.ballImpact(impacts[0].pos, ball.floorId, impacts[0].speed);
-      const v = itemView(inst);
-      v.group.position.set(ball.pos.x, ball.pos.y - BALL_RADIUS, ball.pos.z);
-      v.group.rotation.x += ball.vel.z * dt * 20;
-      v.group.rotation.z -= ball.vel.x * dt * 20;
-      if (ball.resting) {
-        flights.splice(k, 1);
-        rules.ballLanded(inst, { x: ball.pos.x, y: ball.pos.y - BALL_RADIUS, z: ball.pos.z }, ball.floorId);
-      }
+      const t = Math.min(d.traveled, d.range, d.stopAt ?? Infinity);
+      mesh.position.set(d.origin.x + d.dir.x * t, d.origin.y + d.dir.y * t, d.origin.z + d.dir.z * t);
     }
-  }
-
-  // ---- darts --------------------------------------------------------------------------
-  const darts = [];
-  let lastHit = null; // {at, payload}
-
-  bus.on(EVENTS.DOODLE_HIT, (payload = {}) => (lastHit = { at: performance.now(), payload }));
-
-  /** firedAt: taken before DART_FIRED went out, since Doodle may answer DOODLE_HIT inside that emit. */
-  function fireDart(origin, dir, range, floorId, firedAt = performance.now()) {
-    const mesh = kit.dart();
-    mesh.scale.setScalar(1.4);
-    const o = new THREE.Vector3(origin.x + dir.x * 0.3, origin.y + dir.y * 0.3 - 0.04, origin.z + dir.z * 0.3);
-    mesh.position.copy(o);
-    // Object3D.lookAt points +Z at the target; the model's nose is -Z.
-    mesh.lookAt(o.x - dir.x, o.y - dir.y, o.z - dir.z);
-    root.add(mesh);
-    darts.push({ mesh, origin: o, dir: { ...dir }, range: Math.max(0.3, range - 0.3), traveled: 0, firedAt, floorId, stopAt: null });
-  }
-
-  function updateDarts(dt) {
-    for (let k = darts.length - 1; k >= 0; k--) {
-      const d = darts[k];
-      if (lastHit && lastHit.at >= d.firedAt && d.stopAt === null) {
-        // Doodle reported the hit. If it says where, stop there; otherwise just short of here.
-        const p = lastHit.payload;
-        d.stopAt = typeof p.dist === 'number' ? p.dist : p.pos ? Math.hypot(p.pos.x - d.origin.x, p.pos.y - d.origin.y, p.pos.z - d.origin.z) : d.traveled + 0.6;
-        d.hit = true;
-        lastHit = null;
+    for (const [id, mesh] of dartViews)
+      if (!live.has(id)) {
+        root.remove(mesh);
+        dartViews.delete(id);
       }
-      d.traveled += tuning.dart.speed * dt;
-      const end = Math.min(d.range, d.stopAt ?? Infinity);
-      const t = Math.min(d.traveled, end);
-      d.mesh.position.set(d.origin.x + d.dir.x * t, d.origin.y + d.dir.y * t, d.origin.z + d.dir.z * t);
-      if (d.traveled < end) continue;
-      root.remove(d.mesh);
-      darts.splice(k, 1);
-      if (!d.hit) {
-        // A miss drops to the floor where it stopped and can be picked up again.
-        const back = Math.max(0, t - 0.15);
-        const x = d.origin.x + d.dir.x * back;
-        const z = d.origin.z + d.dir.z * back;
-        const g = world.heightAt(x, z, d.floorId);
-        rules.items.spawn(ITEMS.DART, { x, y: g.y, z }, g.floorId, { rotY: Math.atan2(-d.dir.x, -d.dir.z) });
-      }
-    }
   }
 
   // ---- treats ---------------------------------------------------------------------
@@ -351,6 +328,14 @@ export function createGameplayView({ scene, camera, world, rules, tuning, bus })
     }
   }
 
+  // A co-op guest runs no traps: the host's TRAP events (replayed) show which prop went off.
+  if (rules.localId === 'guest')
+    bus.on(EVENTS.TRAP, (p) => {
+      if (!p?.pos) return;
+      for (const prop of trapProps.values())
+        if (prop.spot.kind === p.kind && Math.hypot(prop.spot.pos.x - p.pos.x, prop.spot.pos.z - p.pos.z) < 0.05) trapsFired([{ spot: prop.spot }]);
+    });
+
   function trapsFired(fired) {
     for (const { spot } of fired) {
       const prop = trapProps.get(spot.id);
@@ -411,9 +396,8 @@ export function createGameplayView({ scene, camera, world, rules, tuning, bus })
       opened.add(LOCKS.PLANK);
       dropLock(plank, fd.plank, 0.45);
     }
-    updateFlights(dt);
-    updateDarts(dt);
-    syncItems();
+    syncDarts();
+    syncItems(dt);
     syncTreats();
     updateFallers(dt);
     updateDials(dt);
@@ -434,7 +418,7 @@ export function createGameplayView({ scene, camera, world, rules, tuning, bus })
     kit.dispose();
   }
 
-  syncItems();
+  syncItems(0);
   updateDials(0);
 
   return {
@@ -442,8 +426,6 @@ export function createGameplayView({ scene, camera, world, rules, tuning, bus })
     root,
     targets: () => targets.filter((t) => t.userData.active && visibleDeep(t.parent)),
     update,
-    throwBall,
-    fireDart,
     trapsFired,
     resetDay,
     surfaceAt,
